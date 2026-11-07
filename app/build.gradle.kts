@@ -8,6 +8,95 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+/**
+ * Automatically purges any leftover legacy LibreTube XML resources, translations,
+ * unused vector drawables, or legacy packages so resource linking never fails
+ * with missing or duplicate symbols.
+ */
+fun purgeLegacyLibreTubeFiles(projectDir: File) {
+    val resDir = File(projectDir, "src/main/res")
+    if (resDir.exists()) {
+        resDir.listFiles()?.forEach { dir ->
+            val name = dir.name
+            if (dir.isDirectory && (
+                    name.startsWith("values-") ||
+                    name.startsWith("layout") ||
+                    name.startsWith("menu") ||
+                    name.startsWith("navigation") ||
+                    name.startsWith("anim") ||
+                    name.startsWith("raw") ||
+                    name.startsWith("color")
+                )
+            ) {
+                dir.deleteRecursively()
+            }
+        }
+
+        val allowedValues = setOf("strings.xml", "colors.xml", "themes.xml")
+        File(resDir, "values").listFiles()?.forEach { file ->
+            if (file.name !in allowedValues) file.deleteRecursively()
+        }
+
+        val allowedXml = setOf("fileprovider_paths.xml", "network_security_config.xml")
+        File(resDir, "xml").listFiles()?.forEach { file ->
+            if (file.name !in allowedXml) file.deleteRecursively()
+        }
+
+        val allowedDrawables = setOf("ic_launcher_monochrome.xml")
+        File(resDir, "drawable").listFiles()?.forEach { file ->
+            if (file.name !in allowedDrawables) file.deleteRecursively()
+        }
+
+        val allowedAnyDpi = setOf("ic_launcher.xml", "ic_launcher_round.xml")
+        File(resDir, "mipmap-anydpi-v26").listFiles()?.forEach { file ->
+            if (file.name !in allowedAnyDpi) file.deleteRecursively()
+        }
+
+        val allowedMipmapPngs = setOf(
+            "ic_launcher.png",
+            "ic_launcher_foreground.png",
+            "ic_launcher_round.png",
+            "ic_launcher.webp",
+            "ic_launcher_foreground.webp",
+            "ic_launcher_round.webp"
+        )
+        resDir.listFiles()?.filter { it.isDirectory && it.name.startsWith("mipmap-") && it.name != "mipmap-anydpi-v26" }
+            ?.forEach { mipmapDir ->
+                mipmapDir.listFiles()?.forEach { file ->
+                    if (file.name !in allowedMipmapPngs) file.deleteRecursively()
+                }
+            }
+    }
+
+    val basePkgDir = File(projectDir, "src/main/java/com/github/libretube")
+    if (basePkgDir.exists()) {
+        val allowedRootEntries = setOf("LibreTubeApp.kt", "api", "ui")
+        basePkgDir.listFiles()?.forEach { entry ->
+            if (entry.name !in allowedRootEntries) entry.deleteRecursively()
+        }
+
+        val allowedApiEntries = setOf(
+            "ExternalApi.kt",
+            "HyperStreamModels.kt",
+            "HyperTubeRepository.kt",
+            "JsonHelper.kt",
+            "NewPipeExtractorInstance.kt",
+            "RetrofitInstance.kt",
+            "poToken"
+        )
+        File(basePkgDir, "api").listFiles()?.forEach { entry ->
+            if (entry.name !in allowedApiEntries) entry.deleteRecursively()
+        }
+
+        val allowedUiEntries = setOf("activities", "components", "models", "screens", "theme")
+        File(basePkgDir, "ui").listFiles()?.forEach { entry ->
+            if (entry.name !in allowedUiEntries) entry.deleteRecursively()
+        }
+    }
+}
+
+purgeLegacyLibreTubeFiles(projectDir)
+
 val keystoreProperties = Properties()
 val keystoreFileExists = rootProject.file("keystore.properties").exists()
 if (keystoreFileExists) {
@@ -24,7 +113,10 @@ android {
         versionCode = 72
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        resValue("string", "app_name", "HyperTube")
+    }
+
+    androidResources {
+        localeFilters += listOf("en")
     }
 
     signingConfigs {
@@ -58,7 +150,6 @@ android {
         getByName("debug") {
             isDebuggable = true
             signingConfig = signingConfigs.getByName("debugConfig")
-            resValue("string", "app_name", "HyperTube")
         }
     }
 
@@ -86,7 +177,6 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
-        resValues = true
     }
 
     dependenciesInfo {

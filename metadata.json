@@ -1,0 +1,8 @@
+{
+  "name": "HyperTube",
+  "description": "An iOS-styled YouTube link player with adaptive 16:10 tablet layout, dark glassmorphism UI, and smooth spring animations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

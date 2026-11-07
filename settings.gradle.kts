@@ -1,28 +1,18 @@
 pluginManagement {
     repositories {
-        gradlePluginPortal()
         google()
         mavenCentral()
+        gradlePluginPortal()
     }
 }
-
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        google {
-            content {
-                includeGroupByRegex("com\\.android.*")
-                includeGroupByRegex("com\\.google.*")
-                includeGroupByRegex("androidx.*")
-            }
-        }
+        google()
         mavenCentral()
-        maven("https://jitpack.io")
-        mavenLocal()
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
-rootProject.name = "LibreTube"
-
+rootProject.name = "HyperTube"
 include(":app")
-include(":baselineprofile")

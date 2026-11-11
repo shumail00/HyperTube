@@ -82,6 +82,7 @@ fun purgeLegacyLibreTubeFiles(projectDir: File) {
             "JsonHelper.kt",
             "NewPipeExtractorInstance.kt",
             "RetrofitInstance.kt",
+            "YouTubeInnertubeClient.kt",
             "poToken"
         )
         File(basePkgDir, "api").listFiles()?.forEach { entry ->

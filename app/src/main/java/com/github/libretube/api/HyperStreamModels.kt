@@ -29,7 +29,8 @@ data class StreamFormat(
     val audioTrackName: String? = null,
     val audioTrackType: String? = null,
     val audioLocale: String? = null,
-    val itag: Int? = null
+    val itag: Int? = null,
+    val userAgent: String = YouTubeInnertubeClient.USER_AGENT_ANDROID_VR
 )
 
 data class ChapterInfo(
@@ -42,11 +43,42 @@ data class RelatedStreamInfo(
     val videoId: String,
     val title: String,
     val uploaderName: String,
-    val uploaderVerified: Boolean,
+    val uploaderUrl: String = "",
+    val uploaderAvatar: String = "",
+    val uploaderVerified: Boolean = false,
     val thumbnailUrl: String,
     val durationSeconds: Long,
     val views: Long,
     val uploadedDate: String
+)
+
+data class SearchChannelItem(
+    val channelId: String,
+    val channelUrl: String,
+    val name: String,
+    val avatarUrl: String,
+    val subscriberCount: Long = -1L,
+    val videoCount: Long = -1L,
+    val description: String = "",
+    val verified: Boolean = false
+)
+
+data class SearchResultsPage(
+    val query: String,
+    val channels: List<SearchChannelItem> = emptyList(),
+    val videos: List<RelatedStreamInfo> = emptyList()
+)
+
+data class ChannelPageData(
+    val channelId: String,
+    val channelUrl: String,
+    val name: String,
+    val avatarUrl: String,
+    val bannerUrl: String = "",
+    val description: String = "",
+    val subscriberCount: Long = -1L,
+    val verified: Boolean = false,
+    val videos: List<RelatedStreamInfo> = emptyList()
 )
 
 data class SubtitleTrack(
@@ -62,6 +94,7 @@ data class HyperStreamData(
     val title: String,
     val description: String,
     val uploaderName: String,
+    val uploaderUrl: String = "",
     val uploaderAvatar: String,
     val uploaderSubscribers: Long,
     val uploaderVerified: Boolean,
@@ -86,6 +119,7 @@ object DashManifestGenerator {
     private val transformerFactory: TransformerFactory = TransformerFactory.newInstance()
 
     private data class AdapSetInfo(
+        val groupKey: String,
         val mimeType: String,
         val formats: MutableList<StreamFormat> = mutableListOf(),
         val audioTrackId: String? = null,
@@ -93,19 +127,37 @@ object DashManifestGenerator {
         val audioLocale: String? = null
     )
 
-    fun createDashDataUri(
+    fun createDashXml(
         durationSeconds: Long,
         videoStreams: List<StreamFormat>,
         audioStreams: List<StreamFormat>
     ): String? {
-        val dashVideos = videoStreams.filter {
-            it.videoOnly && it.indexEnd > 0 && !it.url.startsWith("sabr://") && !it.mimeType.isNullOrBlank()
+        val validVideos = videoStreams.filter {
+            it.videoOnly &&
+                it.indexEnd > 0 &&
+                it.initEnd >= 0 &&
+                !it.url.startsWith("sabr://") &&
+                !it.mimeType.isNullOrBlank()
         }
-        val dashAudios = audioStreams.filter {
-            it.indexEnd > 0 && !it.url.startsWith("sabr://") && !it.mimeType.isNullOrBlank()
+        val validAudios = audioStreams.filter {
+            it.indexEnd > 0 &&
+                it.initEnd >= 0 &&
+                !it.url.startsWith("sabr://") &&
+                !it.mimeType.isNullOrBlank()
         }
-        if (dashVideos.isEmpty() || dashAudios.isEmpty()) return null
+        if (validVideos.isEmpty() || validAudios.isEmpty()) return null
 
+        val preferredAgent = validVideos.first().userAgent
+        val dashVideos = validVideos.filter { it.userAgent == preferredAgent }.ifEmpty { validVideos }
+            .filter {
+                val c = it.codec?.lowercase().orEmpty()
+                !c.startsWith("av01") || validVideos.none { other ->
+                    other.height == it.height && !other.codec.orEmpty().lowercase().startsWith("av01")
+                }
+            }
+        val dashAudios = validAudios.filter { it.userAgent == preferredAgent }.ifEmpty { validAudios }
+
+        val safeDuration = durationSeconds.coerceAtLeast(1L)
         val builder = builderFactory.newDocumentBuilder()
         val doc = builder.newDocument()
         val mpd = doc.createElement("MPD")
@@ -113,31 +165,35 @@ object DashManifestGenerator {
         mpd.setAttribute("profiles", "urn:mpeg:dash:profile:full:2011")
         mpd.setAttribute("minBufferTime", "PT1.5S")
         mpd.setAttribute("type", "static")
-        mpd.setAttribute("mediaPresentationDuration", "PT${durationSeconds}S")
+        mpd.setAttribute("mediaPresentationDuration", "PT${safeDuration}S")
 
         val period = doc.createElement("Period")
+        period.setAttribute("duration", "PT${safeDuration}S")
         val adapSetInfos = ArrayList<AdapSetInfo>()
 
         for (stream in dashVideos) {
             val mime = stream.mimeType ?: continue
-            val existing = adapSetInfos.find { it.mimeType == mime }
+            val codecPrefix = stream.codec?.substringBefore(".")?.lowercase().orEmpty()
+            val key = "$mime:$codecPrefix"
+            val existing = adapSetInfos.find { it.groupKey == key }
             if (existing != null) {
                 existing.formats.add(stream)
             } else {
-                adapSetInfos.add(AdapSetInfo(mime, mutableListOf(stream)))
+                adapSetInfos.add(AdapSetInfo(key, mime, mutableListOf(stream)))
             }
         }
 
         for (stream in dashAudios) {
             val mime = stream.mimeType ?: continue
-            val existing = adapSetInfos.find {
-                it.mimeType == mime && it.audioTrackId == stream.audioTrackId
-            }
+            val codecPrefix = stream.codec?.substringBefore(".")?.lowercase().orEmpty()
+            val key = "$mime:$codecPrefix:${stream.audioTrackId.orEmpty()}"
+            val existing = adapSetInfos.find { it.groupKey == key }
             if (existing != null) {
                 existing.formats.add(stream)
             } else {
                 adapSetInfos.add(
                     AdapSetInfo(
+                        key,
                         mime,
                         mutableListOf(stream),
                         stream.audioTrackId,
@@ -148,8 +204,9 @@ object DashManifestGenerator {
             }
         }
 
-        for (adapSet in adapSetInfos) {
+        for ((index, adapSet) in adapSetInfos.withIndex()) {
             val adapSetElement = doc.createElement("AdaptationSet")
+            adapSetElement.setAttribute("id", index.toString())
             adapSetElement.setAttribute("mimeType", adapSet.mimeType)
             adapSetElement.setAttribute("startWithSAP", "1")
             adapSetElement.setAttribute("subsegmentAlignment", "true")
@@ -183,16 +240,26 @@ object DashManifestGenerator {
         val writer = StringWriter()
         val transformer = transformerFactory.newTransformer()
         transformer.transform(domSource, StreamResult(writer))
-        val xml = writer.toString()
+        return writer.toString()
+    }
+
+    fun createDashDataUri(
+        durationSeconds: Long,
+        videoStreams: List<StreamFormat>,
+        audioStreams: List<StreamFormat>
+    ): String? {
+        val xml = createDashXml(durationSeconds, videoStreams, audioStreams) ?: return null
         val encoded = Base64.encodeToString(xml.toByteArray(), Base64.NO_WRAP)
         return "data:application/dash+xml;charset=utf-8;base64,$encoded"
     }
 
     private fun createAudioRepresentation(doc: Document, stream: StreamFormat): Element {
         val representation = doc.createElement("Representation")
-        representation.setAttribute("bandwidth", stream.bitrate.toString())
-        representation.setAttribute("codecs", stream.codec.orEmpty())
-        representation.setAttribute("id", (stream.itag ?: stream.bitrate).toString())
+        representation.setAttribute("bandwidth", stream.bitrate.coerceAtLeast(64000).toString())
+        if (!stream.codec.isNullOrBlank()) {
+            representation.setAttribute("codecs", stream.codec)
+        }
+        representation.setAttribute("id", "audio_${stream.itag ?: stream.bitrate}")
 
         val audioChannelConfig = doc.createElement("AudioChannelConfiguration")
         audioChannelConfig.setAttribute(
@@ -219,13 +286,15 @@ object DashManifestGenerator {
 
     private fun createVideoRepresentation(doc: Document, stream: StreamFormat): Element {
         val representation = doc.createElement("Representation")
-        representation.setAttribute("codecs", stream.codec.orEmpty())
-        representation.setAttribute("bandwidth", stream.bitrate.toString())
-        representation.setAttribute("width", stream.width.toString())
-        representation.setAttribute("height", stream.height.toString())
+        if (!stream.codec.isNullOrBlank()) {
+            representation.setAttribute("codecs", stream.codec)
+        }
+        representation.setAttribute("bandwidth", stream.bitrate.coerceAtLeast(250000).toString())
+        representation.setAttribute("width", stream.width.coerceAtLeast(320).toString())
+        representation.setAttribute("height", stream.height.coerceAtLeast(180).toString())
         representation.setAttribute("maxPlayoutRate", "1")
-        representation.setAttribute("frameRate", stream.fps.toString())
-        representation.setAttribute("id", (stream.itag ?: "${stream.height}p").toString())
+        representation.setAttribute("frameRate", stream.fps.coerceAtLeast(24).toString())
+        representation.setAttribute("id", "video_${stream.itag ?: "${stream.height}_${stream.bitrate}"}")
 
         val baseUrl = doc.createElement("BaseURL")
         baseUrl.appendChild(doc.createTextNode(stream.url))

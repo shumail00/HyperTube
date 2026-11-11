@@ -4,9 +4,11 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.github.libretube.api.ChannelPageData
 import com.github.libretube.api.DashManifestGenerator
 import com.github.libretube.api.HyperStreamData
 import com.github.libretube.api.HyperTubeRepository
+import com.github.libretube.api.SearchResultsPage
 import com.github.libretube.api.YouTubeLinkParser
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,22 +31,33 @@ data class RecentStreamEntry(
 )
 
 enum class InspectorTab(val label: String) {
-    OVERVIEW("Overview"),
-    CHAPTERS("Chapters"),
-    UP_NEXT("Up Next")
+    OVERVIEW("Playlist"),
+    CHAPTERS("Search"),
+    UP_NEXT("Channel")
+}
+
+enum class SideBoxMode(val headerTitle: String) {
+    PLAYLIST("Playlist"),
+    SEARCH("Search"),
+    CHANNEL("Channel")
 }
 
 data class HyperTubeUiState(
     val linkInput: String = "",
     val isLoading: Boolean = false,
+    val isSideBoxLoading: Boolean = false,
     val errorMessage: String? = null,
     val currentStream: HyperStreamData? = null,
-    val availableQualities: List<Int> = emptyList(), // e.g. [1080, 720, 480, 360]
-    val selectedQualityHeight: Int = 0, // 0 = Auto (highest adaptive)
+    val availableQualities: List<Int> = emptyList(),
+    val selectedQualityHeight: Int = 0,
     val playbackSpeed: Float = 1.0f,
     val isAudioOnly: Boolean = false,
+    val isAmbientModeEnabled: Boolean = true,
     val startTimestampSeconds: Long = 0L,
     val activeTab: InspectorTab = InspectorTab.OVERVIEW,
+    val sideBoxMode: SideBoxMode = SideBoxMode.PLAYLIST,
+    val searchResults: SearchResultsPage? = null,
+    val currentChannelPage: ChannelPageData? = null,
     val recentStreams: List<RecentStreamEntry> = emptyList(),
     val showAboutDialog: Boolean = false,
     val dashDataUri: String? = null,
@@ -71,8 +84,27 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(showAboutDialog = show) }
     }
 
+    fun toggleAmbientMode() {
+        _uiState.update { it.copy(isAmbientModeEnabled = !it.isAmbientModeEnabled) }
+    }
+
     fun selectTab(tab: InspectorTab) {
-        _uiState.update { it.copy(activeTab = tab) }
+        val mappedMode = when (tab) {
+            InspectorTab.OVERVIEW -> SideBoxMode.PLAYLIST
+            InspectorTab.CHAPTERS -> SideBoxMode.SEARCH
+            InspectorTab.UP_NEXT -> SideBoxMode.CHANNEL
+        }
+        selectSideBoxMode(mappedMode)
+    }
+
+    fun selectSideBoxMode(mode: SideBoxMode) {
+        _uiState.update { it.copy(sideBoxMode = mode) }
+        if (mode == SideBoxMode.CHANNEL && _uiState.value.currentChannelPage == null) {
+            val stream = _uiState.value.currentStream
+            if (stream != null && (stream.uploaderUrl.isNotBlank() || stream.uploaderName.isNotBlank())) {
+                openChannel(stream.uploaderUrl.ifBlank { stream.uploaderName }, stream.uploaderName)
+            }
+        }
     }
 
     fun setPlaybackSpeed(speed: Float) {
@@ -100,8 +132,9 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
     fun selectQuality(height: Int) {
         _uiState.update { state ->
             val stream = state.currentStream ?: return@update state
-            val mediaUrls = resolvePlaybackUrls(stream, height, state.isAudioOnly)
+            val mediaUrls = resolvePlaybackUrls(stream, height, isAudioOnly = false)
             state.copy(
+                isAudioOnly = false,
                 selectedQualityHeight = height,
                 dashDataUri = mediaUrls.first,
                 directStreamUrl = mediaUrls.second,
@@ -110,28 +143,104 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * Unified handler for the Side Box query input:
+     * - If the user pasted a YouTube link or 11-character video ID, plays the video directly.
+     * - Otherwise, executes a live YouTube search and displays Video + Channel results in the Side Box.
+     */
     fun loadFromRawInput(rawInput: String? = null) {
         val target = (rawInput ?: _uiState.value.linkInput).trim()
         if (target.isEmpty()) {
-            _uiState.update { it.copy(errorMessage = "Paste a YouTube link or 11-character video ID first.") }
+            _uiState.update { it.copy(errorMessage = "Type a search query or paste a YouTube link.") }
             return
         }
 
-        val parsed = YouTubeLinkParser.parseInput(target)
-        if (parsed == null) {
-            _uiState.update {
-                it.copy(errorMessage = "Could not recognize a valid YouTube link or video ID.")
+        if (YouTubeLinkParser.isLikelyYouTubeLinkOrId(target)) {
+            val parsed = YouTubeLinkParser.parseInput(target)
+            if (parsed != null) {
+                _uiState.update {
+                    it.copy(
+                        linkInput = target,
+                        errorMessage = null
+                    )
+                }
+                loadVideoById(parsed.videoId, parsed.timestampSeconds)
+                return
             }
-            return
         }
 
-        _uiState.update {
-            it.copy(
-                linkInput = "https://youtu.be/${parsed.videoId}",
-                errorMessage = null
-            )
+        // Treat as a YouTube search query
+        performSearch(target)
+    }
+
+    fun performSearch(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    linkInput = trimmed,
+                    sideBoxMode = SideBoxMode.SEARCH,
+                    isSideBoxLoading = true,
+                    errorMessage = null
+                )
+            }
+
+            runCatching {
+                HyperTubeRepository.searchYouTube(trimmed)
+            }.onSuccess { results ->
+                _uiState.update {
+                    it.copy(
+                        isSideBoxLoading = false,
+                        searchResults = results,
+                        sideBoxMode = SideBoxMode.SEARCH
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isSideBoxLoading = false,
+                        errorMessage = throwable.localizedMessage ?: "Search failed."
+                    )
+                }
+            }
         }
-        loadVideoById(parsed.videoId, parsed.timestampSeconds)
+    }
+
+    fun openChannel(channelUrlOrId: String, channelName: String = "") {
+        if (channelUrlOrId.isBlank() && channelName.isBlank()) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    sideBoxMode = SideBoxMode.CHANNEL,
+                    isSideBoxLoading = true,
+                    errorMessage = null
+                )
+            }
+
+            runCatching {
+                HyperTubeRepository.fetchChannelPage(
+                    channelUrlOrId = channelUrlOrId.ifBlank { channelName },
+                    fallbackName = channelName
+                )
+            }.onSuccess { channelPage ->
+                _uiState.update {
+                    it.copy(
+                        isSideBoxLoading = false,
+                        currentChannelPage = channelPage,
+                        sideBoxMode = SideBoxMode.CHANNEL
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isSideBoxLoading = false,
+                        errorMessage = throwable.localizedMessage ?: "Unable to load channel."
+                    )
+                }
+            }
+        }
     }
 
     fun loadVideoById(videoId: String, timestampSeconds: Long = 0L) {
@@ -153,7 +262,11 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
                     .distinct()
                     .sortedDescending()
 
-                val defaultQuality = allHeights.firstOrNull { it <= 1080 } ?: allHeights.firstOrNull() ?: 0
+                val defaultQuality = allHeights.firstOrNull { it == 1080 }
+                    ?: allHeights.firstOrNull { it == 720 }
+                    ?: allHeights.firstOrNull { it <= 1080 }
+                    ?: allHeights.firstOrNull()
+                    ?: 0
                 val isAudioOnly = _uiState.value.isAudioOnly
                 val mediaUrls = resolvePlaybackUrls(streamData, defaultQuality, isAudioOnly)
 
@@ -168,8 +281,7 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
                         dashDataUri = mediaUrls.first,
                         directStreamUrl = mediaUrls.second,
                         directAudioUrl = mediaUrls.third,
-                        recentStreams = updatedHistory,
-                        activeTab = InspectorTab.OVERVIEW
+                        recentStreams = updatedHistory
                     )
                 }
             }.onFailure { throwable ->
@@ -199,7 +311,8 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
         targetHeight: Int,
         isAudioOnly: Boolean
     ): Triple<String?, String?, String?> {
-        val bestAudio = stream.audioStreams.maxByOrNull { it.bitrate }?.url
+        val bestAudioFormat = stream.audioStreams.maxByOrNull { it.bitrate }
+        val bestAudio = bestAudioFormat?.url
         if (isAudioOnly && bestAudio != null) {
             return Triple(null, bestAudio, bestAudio)
         }
@@ -208,7 +321,6 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
             return Triple(null, stream.hlsUrl, null)
         }
 
-        // Filter adaptive streams to target height (or all if 0/Auto)
         val filteredAdaptive = if (targetHeight > 0) {
             stream.adaptiveVideoStreams.filter { it.height == targetHeight }
                 .ifEmpty { stream.adaptiveVideoStreams }
@@ -216,29 +328,33 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
             stream.adaptiveVideoStreams
         }
 
-        val dashUri = DashManifestGenerator.createDashDataUri(
+        val preferredAdaptiveVideo = filteredAdaptive.firstOrNull()
+        val exactMuxedMatch = if (targetHeight > 0) {
+            stream.muxedVideoStreams.firstOrNull { it.height == targetHeight }
+        } else {
+            null
+        }
+        val directVideo = preferredAdaptiveVideo?.url
+            ?: exactMuxedMatch?.url
+            ?: stream.muxedVideoStreams.firstOrNull()?.url
+            ?: stream.hlsUrl
+            ?: bestAudio
+
+        val targetAgent = preferredAdaptiveVideo?.userAgent
+        val matchingAudio = if (targetAgent != null) {
+            stream.audioStreams.filter { it.userAgent == targetAgent }.maxByOrNull { it.bitrate }?.url
+                ?: bestAudio
+        } else {
+            bestAudio
+        }
+
+        val dashXml = DashManifestGenerator.createDashXml(
             durationSeconds = stream.durationSeconds,
             videoStreams = filteredAdaptive,
             audioStreams = stream.audioStreams
         )
-        if (dashUri != null) {
-            return Triple(dashUri, null, bestAudio)
-        }
 
-        // Fallback to muxed progressive stream or HLS
-        val muxedMatch = if (targetHeight > 0) {
-            stream.muxedVideoStreams.firstOrNull { it.height == targetHeight }
-                ?: stream.muxedVideoStreams.firstOrNull()
-        } else {
-            stream.muxedVideoStreams.firstOrNull()
-        }
-
-        val directVideo = muxedMatch?.url
-            ?: filteredAdaptive.firstOrNull()?.url
-            ?: stream.hlsUrl
-            ?: bestAudio
-
-        return Triple(null, directVideo, bestAudio)
+        return Triple(dashXml, directVideo, matchingAudio)
     }
 
     private fun addStreamToHistory(stream: HyperStreamData): List<RecentStreamEntry> {
@@ -262,14 +378,13 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
                 return json.decodeFromString<List<RecentStreamEntry>>(raw)
             }
         }
-        // Provide real YouTube starter links so the user can test 1-tap playback immediately
         return listOf(
             RecentStreamEntry(
-                videoId = "aqz-KE-bpKQ",
-                title = "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film",
-                uploaderName = "Blender Foundation",
-                thumbnailUrl = "https://i.ytimg.com/vi/aqz-KE-bpKQ/hqdefault.jpg",
-                durationSeconds = 635
+                videoId = "ZRtdQ81jPUQ",
+                title = "YOASOBI「アイドル」 Official Music Video",
+                uploaderName = "Ayase / YOASOBI",
+                thumbnailUrl = "https://i.ytimg.com/vi/ZRtdQ81jPUQ/hqdefault.jpg",
+                durationSeconds = 226
             ),
             RecentStreamEntry(
                 videoId = "LXb3EKWsInQ",
@@ -279,11 +394,11 @@ class HyperTubeViewModel(application: Application) : AndroidViewModel(applicatio
                 durationSeconds = 314
             ),
             RecentStreamEntry(
-                videoId = "jfKfPfyJRdk",
-                title = "lofi hip hop radio - beats to relax/study to",
-                uploaderName = "Lofi Girl",
-                thumbnailUrl = "https://i.ytimg.com/vi/jfKfPfyJRdk/hqdefault.jpg",
-                durationSeconds = 0
+                videoId = "aqz-KE-bpKQ",
+                title = "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film",
+                uploaderName = "Blender Foundation",
+                thumbnailUrl = "https://i.ytimg.com/vi/aqz-KE-bpKQ/hqdefault.jpg",
+                durationSeconds = 635
             )
         )
     }
@@ -312,6 +427,7 @@ fun formatCompactCount(count: Long): String {
     return when {
         count >= 1_000_000_000L -> String.format(Locale.US, "%.1fB", count / 1_000_000_000.0)
         count >= 1_000_000L -> String.format(Locale.US, "%.1fM", count / 1_000_000.0)
+        count >= 1_000_000L -> String.format(Locale.US, "%.1fK", count / 1_000.0)
         count >= 1_000L -> String.format(Locale.US, "%.1fK", count / 1_000.0)
         else -> count.toString()
     }

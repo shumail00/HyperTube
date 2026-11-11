@@ -51,9 +51,10 @@ class MainActivity : ComponentActivity() {
                         viewModel.loadVideoById(videoId)
                     },
                     onOpenChannel = viewModel::openChannel,
+                    onClearChannelExplorer = viewModel::clearChannelExplorer,
                     onSelectSideBoxMode = viewModel::selectSideBoxMode,
-                    onSelectQuality = viewModel::selectQuality,
-                    onSelectSpeed = viewModel::setPlaybackSpeed,
+                    onSelectQualityStepIndex = viewModel::selectQualityStepIndex,
+                    onSelectSpeedStepIndex = viewModel::setPlaybackSpeedByStepIndex,
                     onToggleAudioOnly = viewModel::toggleAudioOnly,
                     onToggleAmbientMode = viewModel::toggleAmbientMode,
                     onRemoveHistoryItem = viewModel::removeHistoryItem,

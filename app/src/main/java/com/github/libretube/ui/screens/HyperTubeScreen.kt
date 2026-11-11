@@ -4,16 +4,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,14 +22,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -45,6 +45,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -52,17 +53,19 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -72,9 +75,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -84,7 +84,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -93,25 +92,28 @@ import coil.compose.AsyncImage
 import com.github.libretube.api.ChannelPageData
 import com.github.libretube.api.ChapterInfo
 import com.github.libretube.api.HyperStreamData
+import com.github.libretube.api.QualityStepOption
 import com.github.libretube.api.RelatedStreamInfo
 import com.github.libretube.api.SearchChannelItem
 import com.github.libretube.ui.components.IosVideoPlayerStage
 import com.github.libretube.ui.models.HyperTubeUiState
+import com.github.libretube.ui.models.PLAYBACK_SPEED_STEPS
 import com.github.libretube.ui.models.RecentStreamEntry
 import com.github.libretube.ui.models.SideBoxMode
 import com.github.libretube.ui.models.formatCompactCount
 import com.github.libretube.ui.models.formatDuration
-import com.github.libretube.ui.theme.IosCrimsonPink
-import com.github.libretube.ui.theme.IosCyanTint
-import com.github.libretube.ui.theme.IosElectricBlue
-import com.github.libretube.ui.theme.IosLabelPrimary
-import com.github.libretube.ui.theme.IosLabelSecondary
-import com.github.libretube.ui.theme.IosLabelTertiary
-import com.github.libretube.ui.theme.IosOledBlack
+import com.github.libretube.ui.models.sanitizeHtmlDescription
+import java.util.Locale
+import kotlin.math.roundToInt
 
-private val MinimalBoxSurface = Color(0xFF1B1B1D)
-private val MinimalElevatedSurface = Color(0xFF262629)
-private val MinimalBorderColor = Color.White.copy(alpha = 0.07f)
+// HyperOS Tablet Design Tokens
+private val HyperSlateCanvas = Color(0xFF0F1115)
+private val HyperMetadataPillSurface = Color(0xFF1A1D24)
+private val HyperRightDockSurface = Color(0xFF16191F)
+private val HyperCardElevated = Color(0xFF20242D)
+private val HyperAcrylicBorder = Color.White.copy(alpha = 0.06f)
+private val HyperAccentBlue = Color(0xFF4F8CFF)
+private val HyperErrorCoral = Color(0xFFFF5A79)
 
 @Composable
 fun HyperTubeScreen(
@@ -120,9 +122,10 @@ fun HyperTubeScreen(
     onPlayClicked: (String?) -> Unit,
     onSelectVideoId: (String) -> Unit,
     onOpenChannel: (String, String) -> Unit,
+    onClearChannelExplorer: () -> Unit,
     onSelectSideBoxMode: (SideBoxMode) -> Unit,
-    onSelectQuality: (Int) -> Unit,
-    onSelectSpeed: (Float) -> Unit,
+    onSelectQualityStepIndex: (Int) -> Unit,
+    onSelectSpeedStepIndex: (Int) -> Unit,
     onToggleAudioOnly: () -> Unit,
     onToggleAmbientMode: () -> Unit,
     onRemoveHistoryItem: (String) -> Unit,
@@ -133,17 +136,6 @@ fun HyperTubeScreen(
     val focusManager = LocalFocusManager.current
     var isFullscreen by remember { mutableStateOf(false) }
     var seekRequestSeconds by remember { mutableStateOf<Long?>(null) }
-    var liveAmbientColor by remember { mutableStateOf(Color(0xFFE05297)) }
-
-    val smoothAmbientGlow by animateColorAsState(
-        targetValue = if (uiState.isAmbientModeEnabled && uiState.currentStream != null) {
-            liveAmbientColor
-        } else {
-            Color.Transparent
-        },
-        animationSpec = tween(800),
-        label = "screen_ambient_glow"
-    )
 
     if (isFullscreen) {
         BackHandler {
@@ -157,230 +149,90 @@ fun HyperTubeScreen(
         }
     }
 
-    BoxWithConstraints(
+    if (uiState.currentChannelPage != null && uiState.sideBoxMode == SideBoxMode.SEARCH) {
+        BackHandler {
+            onClearChannelExplorer()
+        }
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(IosOledBlack)
-            .drawBehind {
-                // Soft ambient backdrop aura around the left video stage area (matching user's mockup!)
-                if (smoothAmbientGlow.alpha > 0.01f) {
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                smoothAmbientGlow.copy(alpha = 0.34f),
-                                smoothAmbientGlow.copy(alpha = 0.14f),
-                                Color.Transparent
-                            ),
-                            center = Offset(size.width * 0.34f, size.height * 0.38f),
-                            radius = size.width * 0.48f
-                        ),
-                        center = Offset(size.width * 0.34f, size.height * 0.38f),
-                        radius = size.width * 0.48f
-                    )
-                }
-            }
+            .background(HyperSlateCanvas)
+            .windowInsetsPadding(WindowInsets.systemBars)
     ) {
-        val isWideLayout = maxWidth >= 680.dp
-
         if (isFullscreen && uiState.currentStream != null) {
             IosVideoPlayerStage(
                 stream = uiState.currentStream,
+                isLoadingStream = uiState.isLoading,
                 dashDataUri = uiState.dashDataUri,
                 directStreamUrl = uiState.directStreamUrl,
                 directAudioUrl = uiState.directAudioUrl,
-                availableQualities = uiState.availableQualities,
                 selectedQualityHeight = uiState.selectedQualityHeight,
+                selectedQualityLabel = uiState.selectedQualityLabel,
                 playbackSpeed = uiState.playbackSpeed,
                 isAudioOnly = uiState.isAudioOnly,
                 isAmbientModeEnabled = uiState.isAmbientModeEnabled,
                 onToggleAmbientMode = onToggleAmbientMode,
-                onAmbientColorChanged = { liveAmbientColor = it },
                 startTimestampSeconds = uiState.startTimestampSeconds,
                 seekRequestSeconds = seekRequestSeconds,
                 onSeekRequestConsumed = { seekRequestSeconds = null },
-                onSelectQuality = onSelectQuality,
-                onSelectSpeed = onSelectSpeed,
                 onToggleAudioOnly = onToggleAudioOnly,
                 isFullscreen = true,
                 onToggleFullscreen = { isFullscreen = false },
                 modifier = Modifier.fillMaxSize()
             )
-        } else if (isWideLayout) {
-            // Canonical 16:10 Tablet & Landscape Minimalist Layout following the user's mockup
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 24.dp, vertical = 14.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(22.dp)
-                ) {
-                    // LEFT COLUMN (~66%): Top Centered Title + Video w/ Ambient Mode + Glowing Scrubber + Bottom Details Box
-                    Column(
-                        modifier = Modifier
-                            .weight(0.66f)
-                            .fillMaxHeight(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Top Floating Title (matching "YOASOBI 「アイドル」 Official Music Video" in mockup)
-                        Text(
-                            text = uiState.currentStream?.title ?: "HyperTube",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            color = Color.White.copy(alpha = 0.94f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 10.dp, start = 16.dp, end = 16.dp)
-                        )
-
-                        // Video Stage + External Glowing White Scrubber Bar
-                        MinimalVideoStageContainer(
-                            uiState = uiState,
-                            seekRequestSeconds = seekRequestSeconds,
-                            onSeekRequestConsumed = { seekRequestSeconds = null },
-                            onAmbientColorChanged = { liveAmbientColor = it },
-                            onSelectQuality = onSelectQuality,
-                            onSelectSpeed = onSelectSpeed,
-                            onToggleAudioOnly = onToggleAudioOnly,
-                            onToggleAmbientMode = onToggleAmbientMode,
-                            onToggleFullscreen = { isFullscreen = true },
-                            onQuickPlayId = onSelectVideoId
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Bottom Box: Video Details Box (matching the dark rounded bottom box in mockup)
-                        MinimalVideoDetailsBottomBox(
-                            stream = uiState.currentStream,
-                            selectedQuality = uiState.selectedQualityHeight,
-                            onOpenChannel = {
-                                val s = uiState.currentStream
-                                if (s != null) {
-                                    onOpenChannel(s.uploaderUrl.ifBlank { s.uploaderName }, s.uploaderName)
-                                }
-                            },
-                            onSeekToSeconds = { sec -> seekRequestSeconds = sec },
-                            onShareLink = {
-                                uiState.currentStream?.let { shareStreamLink(context, it) }
-                            },
-                            onOpenAbout = { onToggleAbout(true) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        )
-                    }
-
-                    // RIGHT COLUMN (~34%): Top Centered Header ("Playlist" / "Search" / "Channel") + Side Box
-                    Column(
-                        modifier = Modifier
-                            .weight(0.34f)
-                            .fillMaxHeight(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Top Floating Header above Side Box (matching "Playlist" in mockup)
-                        Text(
-                            text = uiState.sideBoxMode.headerTitle,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            color = Color.White.copy(alpha = 0.94f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 10.dp)
-                        )
-
-                        // Side Box: Query / Video Search / Channel Explorer / Playlist
-                        MinimalMultiPurposeSideBox(
-                            uiState = uiState,
-                            onLinkInputChange = onLinkInputChange,
-                            onSubmitQueryOrLink = {
-                                focusManager.clearFocus()
-                                onPlayClicked(null)
-                            },
-                            onPasteClipboard = {
-                                val clip = readClipboardText(context)
-                                if (!clip.isNullOrBlank()) {
-                                    onLinkInputChange(clip)
-                                    focusManager.clearFocus()
-                                    onPlayClicked(clip)
-                                }
-                            },
-                            onSelectMode = onSelectSideBoxMode,
-                            onSelectVideo = onSelectVideoId,
-                            onSelectChannel = onOpenChannel,
-                            onRemoveRecent = onRemoveHistoryItem,
-                            onClearHistory = onClearHistory,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                        )
-                    }
-                }
-
-                // Bottom iOS Home Indicator Pill (matching the bottom center bar in the user's mockup!)
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .width(134.dp)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Color.White.copy(alpha = 0.38f))
-                )
-            }
         } else {
-            // Compact Portrait Handheld Layout with the same minimalist iOS aesthetic & Ambient Mode
-            Box(
+            // Fixed Landscape-Optimized Multi-Pane 16:10 Tablet Shell (Left 65% / Right 35%)
+            Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp)
             ) {
+                // LEFT PANE (~65% width): Video Stage + Custom Capsule Scrubber + Metadata & Discrete Sliders Pill
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                        .weight(0.65f)
+                        .fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = uiState.currentStream?.title ?: "HyperTube",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        color = Color.White.copy(alpha = 0.94f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
+                    IosVideoPlayerStage(
+                        stream = uiState.currentStream,
+                        isLoadingStream = uiState.isLoading,
+                        dashDataUri = uiState.dashDataUri,
+                        directStreamUrl = uiState.directStreamUrl,
+                        directAudioUrl = uiState.directAudioUrl,
+                        selectedQualityHeight = uiState.selectedQualityHeight,
+                        selectedQualityLabel = uiState.selectedQualityLabel,
+                        playbackSpeed = uiState.playbackSpeed,
+                        isAudioOnly = uiState.isAudioOnly,
+                        isAmbientModeEnabled = uiState.isAmbientModeEnabled,
+                        onToggleAmbientMode = onToggleAmbientMode,
+                        startTimestampSeconds = uiState.startTimestampSeconds,
+                        seekRequestSeconds = seekRequestSeconds,
+                        onSeekRequestConsumed = { seekRequestSeconds = null },
+                        onToggleAudioOnly = onToggleAudioOnly,
+                        isFullscreen = false,
+                        onToggleFullscreen = { isFullscreen = true },
+                        onQuickPlayDefault = {
+                            if (uiState.recentStreams.isNotEmpty()) {
+                                onSelectVideoId(uiState.recentStreams.first().videoId)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    MinimalVideoStageContainer(
-                        uiState = uiState,
-                        seekRequestSeconds = seekRequestSeconds,
-                        onSeekRequestConsumed = { seekRequestSeconds = null },
-                        onAmbientColorChanged = { liveAmbientColor = it },
-                        onSelectQuality = onSelectQuality,
-                        onSelectSpeed = onSelectSpeed,
-                        onToggleAudioOnly = onToggleAudioOnly,
-                        onToggleAmbientMode = onToggleAmbientMode,
-                        onToggleFullscreen = { isFullscreen = true },
-                        onQuickPlayId = onSelectVideoId
-                    )
-
-                    MinimalVideoDetailsBottomBox(
+                    // Metadata, Sanitized Description & Discrete Step Sliders Pill
+                    HyperMetadataAndControlsPill(
                         stream = uiState.currentStream,
-                        selectedQuality = uiState.selectedQualityHeight,
+                        sanitizedDescription = uiState.sanitizedDescription,
+                        qualitySteps = uiState.qualitySteps,
+                        selectedQualityIndex = uiState.selectedQualityIndex,
+                        selectedQualityLabel = uiState.selectedQualityLabel,
+                        playbackSpeed = uiState.playbackSpeed,
+                        onSelectQualityStepIndex = onSelectQualityStepIndex,
+                        onSelectSpeedStepIndex = onSelectSpeedStepIndex,
                         onOpenChannel = {
                             val s = uiState.currentStream
                             if (s != null) {
@@ -394,42 +246,35 @@ fun HyperTubeScreen(
                         onOpenAbout = { onToggleAbout(true) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(126.dp)
-                    )
-
-                    MinimalMultiPurposeSideBox(
-                        uiState = uiState,
-                        onLinkInputChange = onLinkInputChange,
-                        onSubmitQueryOrLink = {
-                            focusManager.clearFocus()
-                            onPlayClicked(null)
-                        },
-                        onPasteClipboard = {
-                            val clip = readClipboardText(context)
-                            if (!clip.isNullOrBlank()) {
-                                onLinkInputChange(clip)
-                                focusManager.clearFocus()
-                                onPlayClicked(clip)
-                            }
-                        },
-                        onSelectMode = onSelectSideBoxMode,
-                        onSelectVideo = onSelectVideoId,
-                        onSelectChannel = onOpenChannel,
-                        onRemoveRecent = onRemoveHistoryItem,
-                        onClearHistory = onClearHistory,
-                        modifier = Modifier
-                            .fillMaxWidth()
                             .weight(1f)
                     )
                 }
 
-                Box(
+                // RIGHT PANE (~35% width): Elevated Capsule Dock (Search Bar + Segmented Switches + LazyColumn)
+                HyperRightNavigationDock(
+                    uiState = uiState,
+                    onLinkInputChange = onLinkInputChange,
+                    onSubmitQueryOrLink = {
+                        focusManager.clearFocus()
+                        onPlayClicked(null)
+                    },
+                    onPasteClipboard = {
+                        val clip = readClipboardText(context)
+                        if (!clip.isNullOrBlank()) {
+                            onLinkInputChange(clip)
+                            focusManager.clearFocus()
+                            onPlayClicked(clip)
+                        }
+                    },
+                    onSelectMode = onSelectSideBoxMode,
+                    onSelectVideo = onSelectVideoId,
+                    onSelectChannel = onOpenChannel,
+                    onClearChannelExplorer = onClearChannelExplorer,
+                    onRemoveRecent = onRemoveHistoryItem,
+                    onClearHistory = onClearHistory,
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .width(120.dp)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Color.White.copy(alpha = 0.35f))
+                        .weight(0.35f)
+                        .fillMaxHeight()
                 )
             }
         }
@@ -440,129 +285,23 @@ fun HyperTubeScreen(
     }
 }
 
-@Composable
-private fun MinimalVideoStageContainer(
-    uiState: HyperTubeUiState,
-    seekRequestSeconds: Long?,
-    onSeekRequestConsumed: () -> Unit,
-    onAmbientColorChanged: (Color) -> Unit,
-    onSelectQuality: (Int) -> Unit,
-    onSelectSpeed: (Float) -> Unit,
-    onToggleAudioOnly: () -> Unit,
-    onToggleAmbientMode: () -> Unit,
-    onToggleFullscreen: () -> Unit,
-    onQuickPlayId: (String) -> Unit
-) {
-    AnimatedContent(
-        targetState = uiState.currentStream != null,
-        transitionSpec = {
-            fadeIn(spring(stiffness = Spring.StiffnessMediumLow))
-                .togetherWith(fadeOut(spring(stiffness = Spring.StiffnessMediumLow)))
-        },
-        label = "minimal_video_stage"
-    ) { hasStream ->
-        if (hasStream && uiState.currentStream != null) {
-            IosVideoPlayerStage(
-                stream = uiState.currentStream,
-                dashDataUri = uiState.dashDataUri,
-                directStreamUrl = uiState.directStreamUrl,
-                directAudioUrl = uiState.directAudioUrl,
-                availableQualities = uiState.availableQualities,
-                selectedQualityHeight = uiState.selectedQualityHeight,
-                playbackSpeed = uiState.playbackSpeed,
-                isAudioOnly = uiState.isAudioOnly,
-                isAmbientModeEnabled = uiState.isAmbientModeEnabled,
-                onToggleAmbientMode = onToggleAmbientMode,
-                onAmbientColorChanged = onAmbientColorChanged,
-                startTimestampSeconds = uiState.startTimestampSeconds,
-                seekRequestSeconds = seekRequestSeconds,
-                onSeekRequestConsumed = onSeekRequestConsumed,
-                onSelectQuality = onSelectQuality,
-                onSelectSpeed = onSelectSpeed,
-                onToggleAudioOnly = onToggleAudioOnly,
-                isFullscreen = false,
-                onToggleFullscreen = onToggleFullscreen,
-                showExternalScrubber = true
-            )
-        } else {
-            // Minimalist Standby Stage + Disabled Scrubber Placeholder matching mockup geometry
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(26.dp))
-                        .background(MinimalBoxSurface)
-                        .border(1.dp, MinimalBorderColor, RoundedCornerShape(26.dp))
-                        .clickable {
-                            if (!uiState.isLoading && uiState.recentStreams.isNotEmpty()) {
-                                onQuickPlayId(uiState.recentStreams.first().videoId)
-                            }
-                        }
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (uiState.isLoading) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                strokeWidth = 2.5.dp,
-                                modifier = Modifier.size(34.dp)
-                            )
-                            Text(
-                                text = "Loading Stream…",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = IosLabelSecondary
-                            )
-                        }
-                    } else {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.SmartDisplay,
-                                contentDescription = "HyperTube",
-                                tint = Color.White.copy(alpha = 0.7f),
-                                modifier = Modifier.size(36.dp)
-                            )
-                            Text(
-                                text = "Tap to play or search / paste a link on the right",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = IosLabelSecondary,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-
-                // Subtle idle scrubber track matching the mockup
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp)
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Color.White.copy(alpha = 0.14f))
-                )
-            }
-        }
-    }
-}
-
 /**
- * Bottom Box under the video player: displays video details, channel link (tappable to explore
- * channel in the Side Box), stats, chapters, and description.
+ * Low-contrast acrylic Metadata & Description Pill (`Color(0xFF1A1D24)`, border `0.5.dp` solid
+ * `Color.White.copy(alpha = 0.06f)`, `RoundedCornerShape(20.dp)`):
+ * - Clean video title, channel badge, subscriber count, and metrics
+ * - Discrete Step Sliders for Video Quality (`144p`..`1080p60`/`4K`) and Playback Speed (`0.5x`..`2.0x`)
+ * - HTML-sanitized description via `HtmlCompat.fromHtml(..., FROM_HTML_MODE_COMPACT).toString().trim()`
  */
 @Composable
-private fun MinimalVideoDetailsBottomBox(
+private fun HyperMetadataAndControlsPill(
     stream: HyperStreamData?,
-    selectedQuality: Int,
+    sanitizedDescription: String,
+    qualitySteps: List<QualityStepOption>,
+    selectedQualityIndex: Int,
+    selectedQualityLabel: String,
+    playbackSpeed: Float,
+    onSelectQualityStepIndex: (Int) -> Unit,
+    onSelectSpeedStepIndex: (Int) -> Unit,
     onOpenChannel: () -> Unit,
     onSeekToSeconds: (Long) -> Unit,
     onShareLink: () -> Unit,
@@ -571,9 +310,9 @@ private fun MinimalVideoDetailsBottomBox(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
-            .background(MinimalBoxSurface)
-            .border(1.dp, MinimalBorderColor, RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(20.dp))
+            .background(HyperMetadataPillSurface)
+            .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(20.dp))
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag("video_details_bottom_box")
     ) {
@@ -584,117 +323,56 @@ private fun MinimalVideoDetailsBottomBox(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Top Row: Tappable Channel Chip + Stats + Share + About
+                // Clean Video Title + Action Buttons Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.Top
                 ) {
-                    // Tappable Channel Info -> opens Channel Page in the Side Box!
-                    Row(
+                    Text(
+                        text = stream.title,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 20.sp
+                        ),
+                        color = Color.White.copy(alpha = 0.95f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable(onClick = onOpenChannel)
-                            .padding(vertical = 4.dp, horizontal = 4.dp)
-                            .testTag("explore_channel_button"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        AsyncImage(
-                            model = stream.uploaderAvatar,
-                            contentDescription = stream.uploaderName,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(MinimalElevatedSurface)
-                        )
+                            .padding(end = 10.dp)
+                    )
 
-                        Column(modifier = Modifier.weight(1f, fill = false)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = stream.uploaderName,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = IosLabelPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                if (stream.uploaderVerified) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.CheckCircle,
-                                        contentDescription = "Verified",
-                                        tint = Color.White.copy(alpha = 0.75f),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.ArrowForwardIos,
-                                    contentDescription = "Explore Channel",
-                                    tint = IosLabelTertiary,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                            }
-                            if (stream.uploaderSubscribers > 0) {
-                                Text(
-                                    text = "${formatCompactCount(stream.uploaderSubscribers)} subscribers • Tap to view channel",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = IosLabelSecondary,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
-
-                    // Minimalist Stats & Action Pills
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (stream.views > 0) {
-                            MinimalMetaPill(
+                            HyperMetricBadge(
                                 icon = Icons.Rounded.Visibility,
                                 text = formatCompactCount(stream.views)
                             )
                         }
                         if (stream.likes > 0) {
-                            MinimalMetaPill(
+                            HyperMetricBadge(
                                 icon = Icons.Rounded.ThumbUp,
                                 text = formatCompactCount(stream.likes)
                             )
-                        }
-                        if (selectedQuality > 0) {
-                            Box(
-                                modifier = Modifier
-                                    .height(28.dp)
-                                    .clip(RoundedCornerShape(50))
-                                    .background(MinimalElevatedSurface)
-                                    .padding(horizontal = 9.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "${selectedQuality}p",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White.copy(alpha = 0.9f)
-                                )
-                            }
                         }
                         Box(
                             modifier = Modifier
                                 .size(30.dp)
                                 .clip(CircleShape)
-                                .background(MinimalElevatedSurface)
+                                .background(HyperCardElevated)
                                 .clickable(onClick = onShareLink)
                                 .testTag("share_stream_button"),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Share,
-                                contentDescription = "Share",
-                                tint = IosLabelPrimary,
+                                contentDescription = "Share Video Link",
+                                tint = Color.White.copy(alpha = 0.88f),
                                 modifier = Modifier.size(14.dp)
                             )
                         }
@@ -702,7 +380,7 @@ private fun MinimalVideoDetailsBottomBox(
                             modifier = Modifier
                                 .size(30.dp)
                                 .clip(CircleShape)
-                                .background(MinimalElevatedSurface)
+                                .background(HyperCardElevated)
                                 .clickable(onClick = onOpenAbout)
                                 .testTag("developer_badge_button"),
                             contentAlignment = Alignment.Center
@@ -710,20 +388,88 @@ private fun MinimalVideoDetailsBottomBox(
                             Icon(
                                 imageVector = Icons.Rounded.Info,
                                 contentDescription = "About HyperTube",
-                                tint = IosLabelSecondary,
+                                tint = Color.White.copy(alpha = 0.72f),
                                 modifier = Modifier.size(15.dp)
                             )
                         }
                     }
                 }
 
-                // Chapters Row (if present)
+                // Channel Badge + Subscriber Count Row
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(HyperCardElevated.copy(alpha = 0.75f))
+                        .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(14.dp))
+                        .clickable(onClick = onOpenChannel)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("explore_channel_button"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    AsyncImage(
+                        model = stream.uploaderAvatar,
+                        contentDescription = stream.uploaderName,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.08f))
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = stream.uploaderName,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White.copy(alpha = 0.94f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (stream.uploaderVerified) {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = "Verified Channel",
+                                tint = HyperAccentBlue,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                        if (stream.uploaderSubscribers > 0) {
+                            Text(
+                                text = "• ${formatCompactCount(stream.uploaderSubscribers)} subs",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White.copy(alpha = 0.62f),
+                                maxLines = 1
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                            contentDescription = "Explore Channel",
+                            tint = Color.White.copy(alpha = 0.45f),
+                            modifier = Modifier.size(10.dp)
+                        )
+                    }
+                }
+
+                // Discrete Step Sliders Row: Video Quality Picker + Playback Speed Slider
+                DiscreteQualityAndSpeedSliders(
+                    qualitySteps = qualitySteps,
+                    selectedQualityIndex = selectedQualityIndex,
+                    selectedQualityLabel = selectedQualityLabel,
+                    playbackSpeed = playbackSpeed,
+                    onSelectQualityStepIndex = onSelectQualityStepIndex,
+                    onSelectSpeedStepIndex = onSelectSpeedStepIndex
+                )
+
+                // Chapters Row (if available)
                 if (stream.chapters.isNotEmpty()) {
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(stream.chapters) { chapter ->
-                            MinimalChapterChip(
+                            HyperChapterChip(
                                 chapter = chapter,
                                 onClick = { onSeekToSeconds(chapter.startSeconds) }
                             )
@@ -731,73 +477,290 @@ private fun MinimalVideoDetailsBottomBox(
                     }
                 }
 
-                // Upload Date + Description
-                val metaPrefix = if (stream.uploadDateText.isNotBlank()) "${stream.uploadDateText}  •  " else ""
+                // HTML-Sanitized Description
+                val datePrefix = if (stream.uploadDateText.isNotBlank()) "${stream.uploadDateText}  •  " else ""
+                val displayDescription = sanitizedDescription.ifBlank {
+                    sanitizeHtmlDescription(stream.description)
+                }.ifBlank { "No description provided." }
+
                 Text(
-                    text = metaPrefix + stream.description.ifBlank { "No description provided." },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = IosLabelSecondary,
-                    lineHeight = 19.sp
+                    text = datePrefix + displayDescription,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 12.5.sp,
+                        lineHeight = 18.sp
+                    ),
+                    color = Color.White.copy(alpha = 0.68f)
                 )
             }
         } else {
-            // Standby Video Details Box
-            Row(
+            // Standby Metadata & Discrete Sliders Preview
+            Column(
                 modifier = Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Video Details",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = IosLabelPrimary
-                    )
-                    Text(
-                        text = "Select a video or search in the side panel to view channel details, chapters, and description.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = IosLabelSecondary
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            text = "HyperTube Tablet Stage",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White.copy(alpha = 0.92f)
+                        )
+                        Text(
+                            text = "Select a track from Playlist, Queue, or Search in the right dock to begin.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.60f)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(HyperCardElevated)
+                            .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(50))
+                            .clickable(onClick = onOpenAbout)
+                            .padding(horizontal = 12.dp)
+                            .testTag("developer_badge_button"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = "Developer",
+                            tint = HyperAccentBlue,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = "shumail0ahmed",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White.copy(alpha = 0.90f)
+                        )
+                    }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .height(32.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(MinimalElevatedSurface)
-                        .clickable(onClick = onOpenAbout)
-                        .padding(horizontal = 12.dp)
-                        .testTag("developer_badge_button"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = "Developer",
-                        tint = Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = "shumail0ahmed",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = IosLabelPrimary
-                    )
-                }
+                DiscreteQualityAndSpeedSliders(
+                    qualitySteps = qualitySteps,
+                    selectedQualityIndex = selectedQualityIndex,
+                    selectedQualityLabel = selectedQualityLabel,
+                    playbackSpeed = playbackSpeed,
+                    onSelectQualityStepIndex = onSelectQualityStepIndex,
+                    onSelectSpeedStepIndex = onSelectSpeedStepIndex
+                )
             }
         }
     }
 }
 
 /**
- * Right-hand Side Box:
- * - Top unified iOS search / link query bar
- * - Mode switcher: Playlist | Search | Channel
- * - Displays Playlist (Up Next + Recent), YouTube Search Results, or Channel Page Explorer
+ * Discrete Step Sliders for Video Quality (`steps = (availableStreams.size - 2).coerceAtLeast(0)`,
+ * `0` = lowest `144p` to `max` = highest `1080p60` / `4K`) and Playback Speed (`0.5x`..`2.0x`).
  */
 @Composable
-private fun MinimalMultiPurposeSideBox(
+private fun DiscreteQualityAndSpeedSliders(
+    qualitySteps: List<QualityStepOption>,
+    selectedQualityIndex: Int,
+    selectedQualityLabel: String,
+    playbackSpeed: Float,
+    onSelectQualityStepIndex: (Int) -> Unit,
+    onSelectSpeedStepIndex: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 1. Video Quality Discrete Step Slider
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(HyperCardElevated.copy(alpha = 0.72f))
+                .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.HighQuality,
+                        contentDescription = "Quality",
+                        tint = HyperAccentBlue,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = "Quality",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.75f)
+                    )
+                }
+
+                Text(
+                    text = if (qualitySteps.isNotEmpty()) {
+                        qualitySteps.getOrNull(selectedQualityIndex)?.label ?: selectedQualityLabel
+                    } else {
+                        selectedQualityLabel
+                    },
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = Color.White,
+                    modifier = Modifier.testTag("active_quality_label")
+                )
+            }
+
+            val maxQualityIdx = (qualitySteps.size - 1).coerceAtLeast(1)
+            val qualitySliderSteps = (qualitySteps.size - 2).coerceAtLeast(0)
+            val safeSelectedIdx = selectedQualityIndex.coerceIn(0, qualitySteps.lastIndex.coerceAtLeast(0))
+
+            Slider(
+                value = safeSelectedIdx.toFloat(),
+                onValueChange = { rawValue ->
+                    if (qualitySteps.size > 1) {
+                        onSelectQualityStepIndex(rawValue.roundToInt().coerceIn(0, qualitySteps.lastIndex))
+                    }
+                },
+                enabled = qualitySteps.size > 1,
+                valueRange = 0f..maxQualityIdx.toFloat(),
+                steps = qualitySliderSteps,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = HyperAccentBlue,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.16f),
+                    activeTickColor = Color.White.copy(alpha = 0.7f),
+                    inactiveTickColor = Color.White.copy(alpha = 0.35f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(26.dp)
+                    .testTag("discrete_quality_slider")
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = qualitySteps.firstOrNull()?.label ?: "144p",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = Color.White.copy(alpha = 0.48f)
+                )
+                Text(
+                    text = qualitySteps.lastOrNull()?.label ?: "1080p60",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = Color.White.copy(alpha = 0.48f)
+                )
+            }
+        }
+
+        // 2. Playback Speed Discrete Snap Slider (0.5x, 0.75x, 1.0x, 1.25x, 1.5x, 2.0x)
+        val currentSpeedIdx = PLAYBACK_SPEED_STEPS.indexOfFirst { it == playbackSpeed }
+            .let { if (it >= 0) it else 2 }
+        val speedMaxIdx = PLAYBACK_SPEED_STEPS.lastIndex
+        val speedSliderSteps = (PLAYBACK_SPEED_STEPS.size - 2).coerceAtLeast(0)
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(HyperCardElevated.copy(alpha = 0.72f))
+                .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Speed,
+                        contentDescription = "Playback Speed",
+                        tint = HyperAccentBlue,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = "Speed",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.75f)
+                    )
+                }
+
+                Text(
+                    text = formatSpeedLabel(playbackSpeed),
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = Color.White,
+                    modifier = Modifier.testTag("active_speed_label")
+                )
+            }
+
+            Slider(
+                value = currentSpeedIdx.toFloat(),
+                onValueChange = { rawValue ->
+                    onSelectSpeedStepIndex(rawValue.roundToInt().coerceIn(0, speedMaxIdx))
+                },
+                valueRange = 0f..speedMaxIdx.toFloat(),
+                steps = speedSliderSteps,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = HyperAccentBlue,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.16f),
+                    activeTickColor = Color.White.copy(alpha = 0.7f),
+                    inactiveTickColor = Color.White.copy(alpha = 0.35f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(26.dp)
+                    .testTag("discrete_speed_slider")
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "0.5x",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = Color.White.copy(alpha = 0.48f)
+                )
+                Text(
+                    text = "1.0x",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = Color.White.copy(alpha = 0.48f)
+                )
+                Text(
+                    text = "2.0x",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = Color.White.copy(alpha = 0.48f)
+                )
+            }
+        }
+    }
+}
+
+private fun formatSpeedLabel(speed: Float): String {
+    val formatted = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
+    return "${formatted}x"
+}
+
+/**
+ * Right Pane (Queue & Navigation Dock):
+ * - Container: Elevated capsule surface (`Color(0xFF16191F)`, `RoundedCornerShape(24.dp)`)
+ * - Padding: `16.dp` interior padding all around
+ * - Top Dock: Minimal search bar with clear button and query action + Segmented pill switches (`Playlist`, `Queue`, `Search`) with smooth animated indicator
+ * - List View: Minimalist `LazyColumn` for video items with rounded `14.dp` corners and soft pressed feedback
+ */
+@Composable
+private fun HyperRightNavigationDock(
     uiState: HyperTubeUiState,
     onLinkInputChange: (String) -> Unit,
     onSubmitQueryOrLink: () -> Unit,
@@ -805,6 +768,7 @@ private fun MinimalMultiPurposeSideBox(
     onSelectMode: (SideBoxMode) -> Unit,
     onSelectVideo: (String) -> Unit,
     onSelectChannel: (String, String) -> Unit,
+    onClearChannelExplorer: () -> Unit,
     onRemoveRecent: (String) -> Unit,
     onClearHistory: () -> Unit,
     modifier: Modifier = Modifier
@@ -812,26 +776,27 @@ private fun MinimalMultiPurposeSideBox(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(24.dp))
-            .background(MinimalBoxSurface)
-            .border(1.dp, MinimalBorderColor, RoundedCornerShape(24.dp))
-            .padding(14.dp)
+            .background(HyperRightDockSurface)
+            .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(24.dp))
+            .padding(16.dp)
             .testTag("multi_purpose_side_box"),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Minimalist iOS Query / Link Input Bar
+        // 1. Minimal Search / Link Bar with Clear Button & Query Action
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(42.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(MinimalElevatedSurface)
-                .padding(horizontal = 11.dp),
+                .background(HyperCardElevated)
+                .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = Icons.Rounded.Search,
-                contentDescription = "Search or Paste Link",
-                tint = IosLabelSecondary,
+                contentDescription = "Search or Play Link",
+                tint = Color.White.copy(alpha = 0.65f),
                 modifier = Modifier
                     .size(18.dp)
                     .clickable { onSubmitQueryOrLink() }
@@ -845,9 +810,9 @@ private fun MinimalMultiPurposeSideBox(
             ) {
                 if (uiState.linkInput.isEmpty()) {
                     Text(
-                        text = "Search YouTube or paste link…",
+                        text = "Search videos or paste YouTube link…",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = IosLabelTertiary,
+                        color = Color.White.copy(alpha = 0.38f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -856,12 +821,13 @@ private fun MinimalMultiPurposeSideBox(
                     value = uiState.linkInput,
                     onValueChange = onLinkInputChange,
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = IosLabelPrimary),
-                    cursorBrush = SolidColor(Color.White),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
+                    cursorBrush = SolidColor(HyperAccentBlue),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(
                         onSearch = { onSubmitQueryOrLink() },
-                        onGo = { onSubmitQueryOrLink() }
+                        onGo = { onSubmitQueryOrLink() },
+                        onDone = { onSubmitQueryOrLink() }
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -878,8 +844,8 @@ private fun MinimalMultiPurposeSideBox(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
-                        contentDescription = "Clear",
-                        tint = IosLabelSecondary,
+                        contentDescription = "Clear Query",
+                        tint = Color.White.copy(alpha = 0.65f),
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -894,73 +860,46 @@ private fun MinimalMultiPurposeSideBox(
                 Icon(
                     imageVector = Icons.Rounded.ContentPaste,
                     contentDescription = "Paste Clipboard",
-                    tint = IosLabelSecondary,
-                    modifier = Modifier.size(16.dp)
+                    tint = Color.White.copy(alpha = 0.65f),
+                    modifier = Modifier.size(15.dp)
                 )
             }
         }
 
-        // 2. Minimal Mode Switcher Pills (Playlist | Search | Channel)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(32.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(MinimalElevatedSurface.copy(alpha = 0.7f))
-                .padding(3.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            SideBoxMode.entries.forEach { mode ->
-                val selected = uiState.sideBoxMode == mode
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (selected) Color.White.copy(alpha = 0.16f) else Color.Transparent
-                        )
-                        .clickable { onSelectMode(mode) }
-                        .testTag("side_box_tab_${mode.name.lowercase()}"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = mode.headerTitle,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) Color.White else IosLabelSecondary
-                    )
-                }
-            }
-        }
+        // 2. Segmented Pill Switches (Playlist, Queue, Search) with Smooth Animated Indicator Selection
+        HyperSegmentedPillSwitch(
+            selectedMode = uiState.sideBoxMode,
+            onSelectMode = onSelectMode
+        )
 
-        // Optional error toast inside Side Box
+        // Error Banner (if any)
         AnimatedVisibility(visible = !uiState.errorMessage.isNullOrBlank()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(IosCrimsonPink.copy(alpha = 0.14f))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(HyperErrorCoral.copy(alpha = 0.14f))
+                    .border(0.5.dp, HyperErrorCoral.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Icon(
                     imageVector = Icons.Rounded.ErrorOutline,
                     contentDescription = null,
-                    tint = IosCrimsonPink,
+                    tint = HyperErrorCoral,
                     modifier = Modifier.size(15.dp)
                 )
                 Text(
                     text = uiState.errorMessage.orEmpty(),
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFFFFB3C1),
+                    color = Color(0xFFFFB8C6),
                     maxLines = 2
                 )
             }
         }
 
-        // 3. Content Area based on active SideBoxMode
+        // 3. Minimalist LazyColumn Content Area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -974,36 +913,46 @@ private fun MinimalMultiPurposeSideBox(
                     CircularProgressIndicator(
                         color = Color.White,
                         strokeWidth = 2.2.dp,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
             } else {
                 when (uiState.sideBoxMode) {
                     SideBoxMode.PLAYLIST -> {
-                        SideBoxPlaylistView(
-                            relatedStreams = uiState.currentStream?.relatedStreams.orEmpty(),
+                        PlaylistDockList(
                             recentStreams = uiState.recentStreams,
                             activeVideoId = uiState.currentStream?.videoId,
                             onSelectVideo = onSelectVideo,
-                            onSelectChannel = onSelectChannel,
                             onRemoveRecent = onRemoveRecent,
                             onClearHistory = onClearHistory
                         )
                     }
 
-                    SideBoxMode.SEARCH -> {
-                        SideBoxSearchView(
-                            searchResults = uiState.searchResults,
-                            onSelectVideo = onSelectVideo,
-                            onSelectChannel = onSelectChannel
+                    SideBoxMode.QUEUE -> {
+                        QueueDockList(
+                            relatedStreams = uiState.currentStream?.relatedStreams.orEmpty(),
+                            recentStreams = uiState.recentStreams,
+                            activeVideoId = uiState.currentStream?.videoId,
+                            onSelectVideo = onSelectVideo
                         )
                     }
 
-                    SideBoxMode.CHANNEL -> {
-                        SideBoxChannelExplorerView(
-                            channelPage = uiState.currentChannelPage,
-                            onSelectVideo = onSelectVideo
-                        )
+                    SideBoxMode.SEARCH -> {
+                        if (uiState.currentChannelPage != null) {
+                            ChannelExplorerList(
+                                channelPage = uiState.currentChannelPage,
+                                activeVideoId = uiState.currentStream?.videoId,
+                                onBackToSearch = onClearChannelExplorer,
+                                onSelectVideo = onSelectVideo
+                            )
+                        } else {
+                            SearchDockList(
+                                searchResults = uiState.searchResults,
+                                activeVideoId = uiState.currentStream?.videoId,
+                                onSelectVideo = onSelectVideo,
+                                onSelectChannel = onSelectChannel
+                            )
+                        }
                     }
                 }
             }
@@ -1012,82 +961,184 @@ private fun MinimalMultiPurposeSideBox(
 }
 
 @Composable
-private fun SideBoxPlaylistView(
-    relatedStreams: List<RelatedStreamInfo>,
+private fun HyperSegmentedPillSwitch(
+    selectedMode: SideBoxMode,
+    onSelectMode: (SideBoxMode) -> Unit
+) {
+    val modes = SideBoxMode.entries
+    val selectedIdx = modes.indexOf(selectedMode).coerceAtLeast(0)
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(34.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(HyperCardElevated.copy(alpha = 0.85f))
+            .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(12.dp))
+            .padding(3.dp)
+    ) {
+        val segmentWidth = maxWidth / modes.size
+        val indicatorOffset by animateDpAsState(
+            targetValue = segmentWidth * selectedIdx,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessMedium
+            ),
+            label = "segmented_pill_offset"
+        )
+
+        // Smooth Animated Pill Indicator
+        Box(
+            modifier = Modifier
+                .offset(x = indicatorOffset)
+                .width(segmentWidth)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(9.dp))
+                .background(Color.White.copy(alpha = 0.14f))
+                .border(0.5.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(9.dp))
+        )
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            modes.forEach { mode ->
+                val isSelected = mode == selectedMode
+                val textColor by animateColorAsState(
+                    targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.56f),
+                    label = "segment_text_color"
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(9.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onSelectMode(mode) }
+                        .testTag("side_box_tab_${mode.name.lowercase()}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = mode.headerTitle,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        color = textColor
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistDockList(
     recentStreams: List<RecentStreamEntry>,
     activeVideoId: String?,
     onSelectVideo: (String) -> Unit,
-    onSelectChannel: (String, String) -> Unit,
     onRemoveRecent: (String) -> Unit,
     onClearHistory: () -> Unit
 ) {
+    if (recentStreams.isEmpty()) {
+        DockEmptyPlaceholder("Your saved playlist & recent streams will appear here.")
+        return
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(bottom = 12.dp)
+        contentPadding = PaddingValues(bottom = 8.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Saved & Recent (${recentStreams.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.55f)
+                )
+                Text(
+                    text = "Clear",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onClearHistory() }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .testTag("clear_history_button")
+                )
+            }
+        }
+
+        items(recentStreams, key = { "playlist_${it.videoId}" }) { item ->
+            HyperDockVideoCard(
+                title = item.title,
+                subtitle = item.uploaderName,
+                thumbnailUrl = item.thumbnailUrl,
+                durationSeconds = item.durationSeconds,
+                isPlayingNow = item.videoId == activeVideoId,
+                onClick = { onSelectVideo(item.videoId) },
+                onRemove = { onRemoveRecent(item.videoId) },
+                testTag = "history_card_${item.videoId}"
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueDockList(
+    relatedStreams: List<RelatedStreamInfo>,
+    recentStreams: List<RecentStreamEntry>,
+    activeVideoId: String?,
+    onSelectVideo: (String) -> Unit
+) {
+    if (relatedStreams.isEmpty() && recentStreams.isEmpty()) {
+        DockEmptyPlaceholder("Play any video to populate the Up Next queue.")
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(bottom = 8.dp)
     ) {
         if (relatedStreams.isNotEmpty()) {
             item {
                 Text(
-                    text = "Up Next",
+                    text = "Up Next (${relatedStreams.size})",
                     style = MaterialTheme.typography.labelMedium,
-                    color = IosLabelSecondary,
-                    modifier = Modifier.padding(vertical = 2.dp, horizontal = 2.dp)
+                    color = Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp)
                 )
             }
-            items(relatedStreams, key = { "rel_${it.videoId}" }) { item ->
-                MinimalStreamRowCard(
-                    videoId = item.videoId,
+            items(relatedStreams, key = { "queue_rel_${it.videoId}" }) { rel ->
+                val meta = buildString {
+                    append(rel.uploaderName)
+                    if (rel.views > 0) append(" • ${formatCompactCount(rel.views)} views")
+                }
+                HyperDockVideoCard(
+                    title = rel.title,
+                    subtitle = meta,
+                    thumbnailUrl = rel.thumbnailUrl,
+                    durationSeconds = rel.durationSeconds,
+                    isPlayingNow = rel.videoId == activeVideoId,
+                    onClick = { onSelectVideo(rel.videoId) },
+                    testTag = "related_card_${rel.videoId}"
+                )
+            }
+        } else {
+            items(recentStreams, key = { "queue_fallback_${it.videoId}" }) { item ->
+                HyperDockVideoCard(
                     title = item.title,
-                    uploaderName = item.uploaderName,
+                    subtitle = item.uploaderName,
                     thumbnailUrl = item.thumbnailUrl,
                     durationSeconds = item.durationSeconds,
-                    views = item.views,
-                    isActive = item.videoId == activeVideoId,
+                    isPlayingNow = item.videoId == activeVideoId,
                     onClick = { onSelectVideo(item.videoId) },
-                    onChannelClick = if (item.uploaderUrl.isNotBlank() || item.uploaderName.isNotBlank()) {
-                        { onSelectChannel(item.uploaderUrl.ifBlank { item.uploaderName }, item.uploaderName) }
-                    } else null
-                )
-            }
-        }
-
-        if (recentStreams.isNotEmpty()) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = if (relatedStreams.isNotEmpty()) 6.dp else 0.dp, bottom = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Recent Queue",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = IosLabelSecondary
-                    )
-                    Text(
-                        text = "Clear",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = IosLabelTertiary,
-                        modifier = Modifier
-                            .clickable(onClick = onClearHistory)
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-                }
-            }
-            items(recentStreams, key = { "rec_${it.videoId}" }) { entry ->
-                MinimalStreamRowCard(
-                    videoId = entry.videoId,
-                    title = entry.title,
-                    uploaderName = entry.uploaderName,
-                    thumbnailUrl = entry.thumbnailUrl,
-                    durationSeconds = entry.durationSeconds,
-                    views = -1L,
-                    isActive = entry.videoId == activeVideoId,
-                    onClick = { onSelectVideo(entry.videoId) },
-                    onChannelClick = { onSelectChannel(entry.uploaderName, entry.uploaderName) },
-                    onRemoveClick = { onRemoveRecent(entry.videoId) }
+                    testTag = "queue_card_${item.videoId}"
                 )
             }
         }
@@ -1095,290 +1146,216 @@ private fun SideBoxPlaylistView(
 }
 
 @Composable
-private fun SideBoxSearchView(
+private fun SearchDockList(
     searchResults: com.github.libretube.api.SearchResultsPage?,
+    activeVideoId: String?,
     onSelectVideo: (String) -> Unit,
     onSelectChannel: (String, String) -> Unit
 ) {
-    if (searchResults == null || (searchResults.channels.isEmpty() && searchResults.videos.isEmpty())) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Type any query above and press Search to find videos & channels.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = IosLabelSecondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(16.dp)
-            )
-        }
+    if (searchResults == null) {
+        DockEmptyPlaceholder("Type a search query above to find videos and channels via Piped.")
+        return
+    }
+
+    if (searchResults.channels.isEmpty() && searchResults.videos.isEmpty()) {
+        DockEmptyPlaceholder("No results found for \"${searchResults.query}\".")
         return
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(bottom = 12.dp)
+        contentPadding = PaddingValues(bottom = 8.dp)
     ) {
         if (searchResults.channels.isNotEmpty()) {
-            item {
-                Text(
-                    text = "Channels",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = IosLabelSecondary,
-                    modifier = Modifier.padding(horizontal = 2.dp)
-                )
-            }
-            items(searchResults.channels.take(4), key = { "ch_${it.channelUrl}_${it.name}" }) { channel ->
-                MinimalChannelRowCard(
+            items(searchResults.channels.take(3), key = { "ch_${it.channelId}" }) { channel ->
+                HyperChannelRowCard(
                     channel = channel,
-                    onClick = {
-                        onSelectChannel(channel.channelUrl.ifBlank { channel.name }, channel.name)
-                    }
+                    onClick = { onSelectChannel(channel.channelUrl.ifBlank { channel.channelId }, channel.name) }
                 )
             }
         }
 
-        if (searchResults.videos.isNotEmpty()) {
-            item {
-                Text(
-                    text = "Videos",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = IosLabelSecondary,
-                    modifier = Modifier.padding(top = 4.dp, start = 2.dp)
-                )
+        items(searchResults.videos, key = { "sr_${it.videoId}" }) { video ->
+            val subtitle = buildString {
+                append(video.uploaderName)
+                if (video.views > 0) append(" • ${formatCompactCount(video.views)} views")
             }
-            items(searchResults.videos, key = { "sr_${it.videoId}" }) { video ->
-                MinimalStreamRowCard(
-                    videoId = video.videoId,
-                    title = video.title,
-                    uploaderName = video.uploaderName,
-                    thumbnailUrl = video.thumbnailUrl,
-                    durationSeconds = video.durationSeconds,
-                    views = video.views,
-                    isActive = false,
-                    onClick = { onSelectVideo(video.videoId) },
-                    onChannelClick = {
-                        onSelectChannel(video.uploaderUrl.ifBlank { video.uploaderName }, video.uploaderName)
-                    }
-                )
-            }
+            HyperDockVideoCard(
+                title = video.title,
+                subtitle = subtitle,
+                thumbnailUrl = video.thumbnailUrl,
+                durationSeconds = video.durationSeconds,
+                isPlayingNow = video.videoId == activeVideoId,
+                onClick = { onSelectVideo(video.videoId) },
+                testTag = "search_video_${video.videoId}"
+            )
         }
     }
 }
 
 @Composable
-private fun SideBoxChannelExplorerView(
-    channelPage: ChannelPageData?,
+private fun ChannelExplorerList(
+    channelPage: ChannelPageData,
+    activeVideoId: String?,
+    onBackToSearch: () -> Unit,
     onSelectVideo: (String) -> Unit
 ) {
-    if (channelPage == null) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Tap any channel name in the video details or search results to explore its videos here.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = IosLabelSecondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(16.dp)
-            )
-        }
-        return
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(bottom = 12.dp)
+        contentPadding = PaddingValues(bottom = 8.dp)
     ) {
-        // Channel Header Card
         item {
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MinimalElevatedSurface)
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(HyperCardElevated)
+                    .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(14.dp))
+                    .padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable(onClick = onBackToSearch),
+                    contentAlignment = Alignment.Center
                 ) {
-                    AsyncImage(
-                        model = channelPage.avatarUrl,
-                        contentDescription = channelPage.name,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(MinimalBoxSurface)
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back to Search",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
                     )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                text = channelPage.name,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = IosLabelPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (channelPage.verified) {
-                                Icon(
-                                    imageVector = Icons.Rounded.CheckCircle,
-                                    contentDescription = "Verified",
-                                    tint = Color.White.copy(alpha = 0.8f),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                        if (channelPage.subscriberCount > 0) {
-                            Text(
-                                text = "${formatCompactCount(channelPage.subscriberCount)} subscribers",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = IosLabelSecondary
+                }
+
+                AsyncImage(
+                    model = channelPage.avatarUrl,
+                    contentDescription = channelPage.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                )
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = channelPage.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (channelPage.verified) {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = "Verified",
+                                tint = HyperAccentBlue,
+                                modifier = Modifier.size(13.dp)
                             )
                         }
                     }
-                }
-
-                if (channelPage.description.isNotBlank()) {
-                    Text(
-                        text = channelPage.description,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = IosLabelSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (channelPage.subscriberCount > 0) {
+                        Text(
+                            text = "${formatCompactCount(channelPage.subscriberCount)} subscribers",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.62f)
+                        )
+                    }
                 }
             }
         }
 
-        item {
-            Text(
-                text = "Channel Videos (${channelPage.videos.size})",
-                style = MaterialTheme.typography.labelMedium,
-                color = IosLabelSecondary,
-                modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp)
-            )
-        }
+        items(channelPage.videos, key = { "ch_vid_${it.videoId}" }) { video ->
+            val subtitle = buildString {
+                if (video.views > 0) append("${formatCompactCount(video.views)} views")
+                if (video.uploadedDate.isNotBlank()) {
+                    if (isNotEmpty()) append(" • ")
+                    append(video.uploadedDate)
+                }
+            }.ifBlank { channelPage.name }
 
-        items(channelPage.videos, key = { "chv_${it.videoId}" }) { video ->
-            MinimalStreamRowCard(
-                videoId = video.videoId,
+            HyperDockVideoCard(
                 title = video.title,
-                uploaderName = channelPage.name,
+                subtitle = subtitle,
                 thumbnailUrl = video.thumbnailUrl,
                 durationSeconds = video.durationSeconds,
-                views = video.views,
-                isActive = false,
-                onClick = { onSelectVideo(video.videoId) }
+                isPlayingNow = video.videoId == activeVideoId,
+                onClick = { onSelectVideo(video.videoId) },
+                testTag = "channel_video_${video.videoId}"
             )
         }
     }
 }
 
+/**
+ * Minimalist horizontal thumbnail + metadata row card with rounded `14.dp` corners,
+ * soft pressed feedback, and zero clutter.
+ */
 @Composable
-private fun MinimalChannelRowCard(
-    channel: SearchChannelItem,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MinimalElevatedSurface.copy(alpha = 0.75f))
-            .clickable(onClick = onClick)
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        AsyncImage(
-            model = channel.avatarUrl,
-            contentDescription = channel.name,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(38.dp)
-                .clip(CircleShape)
-                .background(MinimalBoxSurface)
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = channel.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = IosLabelPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (channel.verified) {
-                    Icon(
-                        imageVector = Icons.Rounded.CheckCircle,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.75f),
-                        modifier = Modifier.size(13.dp)
-                    )
-                }
-            }
-            if (channel.subscriberCount > 0) {
-                Text(
-                    text = "${formatCompactCount(channel.subscriberCount)} subscribers",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = IosLabelSecondary
-                )
-            }
-        }
-        Icon(
-            imageVector = Icons.AutoMirrored.Rounded.ArrowForwardIos,
-            contentDescription = "Open Channel",
-            tint = IosLabelTertiary,
-            modifier = Modifier.size(13.dp)
-        )
-    }
-}
-
-@Composable
-private fun MinimalStreamRowCard(
-    videoId: String,
+private fun HyperDockVideoCard(
     title: String,
-    uploaderName: String,
+    subtitle: String,
     thumbnailUrl: String,
     durationSeconds: Long,
-    views: Long,
-    isActive: Boolean,
+    isPlayingNow: Boolean,
     onClick: () -> Unit,
-    onChannelClick: (() -> Unit)? = null,
-    onRemoveClick: (() -> Unit)? = null
+    onRemove: (() -> Unit)? = null,
+    testTag: String
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        label = "dock_card_scale"
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(14.dp))
             .background(
-                if (isActive) Color.White.copy(alpha = 0.12f)
-                else MinimalElevatedSurface.copy(alpha = 0.55f)
+                when {
+                    isPlayingNow -> Color.White.copy(alpha = 0.13f)
+                    isPressed -> HyperCardElevated.copy(alpha = 0.95f)
+                    else -> HyperCardElevated.copy(alpha = 0.62f)
+                }
             )
-            .clickable(onClick = onClick)
+            .border(
+                width = 0.5.dp,
+                color = if (isPlayingNow) HyperAccentBlue.copy(alpha = 0.55f) else HyperAcrylicBorder,
+                shape = RoundedCornerShape(14.dp)
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
             .padding(8.dp)
-            .testTag("stream_card_$videoId"),
+            .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Box(
             modifier = Modifier
-                .width(104.dp)
+                .width(102.dp)
                 .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(10.dp))
-                .background(IosOledBlack)
+                .background(Color.Black)
         ) {
             AsyncImage(
                 model = thumbnailUrl,
@@ -1386,17 +1363,18 @@ private fun MinimalStreamRowCard(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
+
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(4.dp)
-                    .clip(RoundedCornerShape(5.dp))
-                    .background(Color.Black.copy(alpha = 0.78f))
-                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.76f))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
             ) {
                 Text(
                     text = formatDuration(durationSeconds),
-                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 10.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                     color = Color.White
                 )
             }
@@ -1409,43 +1387,33 @@ private fun MinimalStreamRowCard(
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium.copy(
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 13.sp,
-                    lineHeight = 16.sp
+                    fontSize = 12.5.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = if (isPlayingNow) FontWeight.SemiBold else FontWeight.Medium
                 ),
-                color = IosLabelPrimary,
+                color = Color.White.copy(alpha = 0.94f),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
 
-            val subline = if (views > 0) {
-                "$uploaderName • ${formatCompactCount(views)} views"
-            } else {
-                uploaderName
-            }
             Text(
-                text = subline,
-                style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
-                color = IosLabelSecondary,
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.56f),
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = if (onChannelClick != null) {
-                    Modifier.clickable { onChannelClick() }
-                } else {
-                    Modifier
-                }
+                overflow = TextOverflow.Ellipsis
             )
         }
 
-        if (onRemoveClick != null) {
+        if (onRemove != null) {
             IconButton(
-                onClick = onRemoveClick,
+                onClick = onRemove,
                 modifier = Modifier.size(26.dp)
             ) {
                 Icon(
                     imageVector = Icons.Rounded.DeleteOutline,
-                    contentDescription = "Remove",
-                    tint = IosLabelTertiary,
+                    contentDescription = "Remove Item",
+                    tint = Color.White.copy(alpha = 0.42f),
                     modifier = Modifier.size(15.dp)
                 )
             }
@@ -1454,7 +1422,73 @@ private fun MinimalStreamRowCard(
 }
 
 @Composable
-private fun MinimalMetaPill(
+private fun HyperChannelRowCard(
+    channel: SearchChannelItem,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(HyperCardElevated.copy(alpha = 0.72f))
+            .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("search_channel_${channel.channelId}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        AsyncImage(
+            model = channel.avatarUrl,
+            contentDescription = channel.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.08f))
+        )
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = channel.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (channel.verified) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = "Verified",
+                        tint = HyperAccentBlue,
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
+            }
+            if (channel.subscriberCount > 0) {
+                Text(
+                    text = "${formatCompactCount(channel.subscriberCount)} subscribers",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.58f)
+                )
+            }
+        }
+
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.ArrowForwardIos,
+            contentDescription = "Open Channel",
+            tint = Color.White.copy(alpha = 0.45f),
+            modifier = Modifier.size(12.dp)
+        )
+    }
+}
+
+@Composable
+private fun HyperMetricBadge(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     text: String
 ) {
@@ -1462,51 +1496,69 @@ private fun MinimalMetaPill(
         modifier = Modifier
             .height(28.dp)
             .clip(RoundedCornerShape(50))
-            .background(MinimalElevatedSurface)
-            .padding(horizontal = 10.dp),
+            .background(HyperCardElevated)
+            .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(50))
+            .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = IosLabelSecondary,
+            tint = Color.White.copy(alpha = 0.70f),
             modifier = Modifier.size(13.dp)
         )
         Text(
             text = text,
             style = MaterialTheme.typography.labelMedium,
-            color = IosLabelPrimary
+            color = Color.White.copy(alpha = 0.88f)
         )
     }
 }
 
 @Composable
-private fun MinimalChapterChip(
+private fun HyperChapterChip(
     chapter: ChapterInfo,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
-            .height(28.dp)
+            .height(26.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(MinimalElevatedSurface)
+            .background(HyperCardElevated)
+            .border(0.5.dp, HyperAcrylicBorder, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
             text = formatDuration(chapter.startSeconds),
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White.copy(alpha = 0.9f)
+            style = MaterialTheme.typography.labelSmall,
+            color = HyperAccentBlue
         )
         Text(
             text = chapter.title,
-            style = MaterialTheme.typography.labelMedium,
-            color = IosLabelSecondary,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.88f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun DockEmptyPlaceholder(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.50f)
         )
     }
 }
@@ -1517,60 +1569,42 @@ private fun DeveloperAboutModal(onDismiss: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(26.dp))
-                .background(MinimalBoxSurface)
-                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(26.dp))
+                .clip(RoundedCornerShape(24.dp))
+                .background(HyperMetadataPillSurface)
+                .border(0.5.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(24.dp))
                 .padding(22.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(MinimalElevatedSurface),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.PlayArrow,
-                    contentDescription = "HyperTube",
-                    tint = Color.White,
-                    modifier = Modifier.size(30.dp)
-                )
-            }
-
             Text(
                 text = "HyperTube",
                 style = MaterialTheme.typography.headlineMedium,
-                color = IosLabelPrimary
+                color = Color.White
             )
-
             Text(
                 text = "Crafted by shumail0ahmed",
-                style = MaterialTheme.typography.titleSmall,
-                color = Color.White.copy(alpha = 0.85f)
-            )
-
-            Text(
-                text = "Minimalist iOS Cinema YouTube Player featuring Real-Time Ambient Mode, 144p–4K Adaptive DASH Streaming, Live YouTube Search, and Channel Page Exploration.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = IosLabelSecondary,
-                textAlign = TextAlign.Center
+                color = HyperAccentBlue
             )
-
+            Text(
+                text = "Lean 16:10 HyperOS tablet YouTube player powered strictly by the Piped REST API and Media3 ExoPlayer.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.72f)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background( Color.White.copy(alpha = 0.14f) )
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.14f))
                     .clickable(onClick = onDismiss)
                     .testTag("close_about_modal_button"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "Done",
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.titleSmall,
                     color = Color.White
                 )
             }
@@ -1579,17 +1613,18 @@ private fun DeveloperAboutModal(onDismiss: () -> Unit) {
 }
 
 private fun readClipboardText(context: Context): String? {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    val clip = clipboard?.primaryClip ?: return null
-    if (clip.itemCount <= 0) return null
-    return clip.getItemAt(0).coerceToText(context)?.toString()?.trim()
+    return runCatching {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val item = clipboard?.primaryClip?.getItemAt(0)
+        item?.coerceToText(context)?.toString()?.trim()
+    }.getOrNull()
 }
 
 private fun shareStreamLink(context: Context, stream: HyperStreamData) {
     val shareIntent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, stream.title)
-        putExtra(Intent.EXTRA_TEXT, "${stream.title} - https://youtu.be/${stream.videoId}")
+        putExtra(Intent.EXTRA_TEXT, "${stream.title}\nhttps://youtu.be/${stream.videoId}")
     }
-    context.startActivity(Intent.createChooser(shareIntent, "Share Stream"))
+    context.startActivity(Intent.createChooser(shareIntent, "Share YouTube Link"))
 }

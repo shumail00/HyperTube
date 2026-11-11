@@ -1,15 +1,14 @@
 package com.github.libretube.ui.components
 
-import android.graphics.Bitmap
-import android.graphics.Matrix
+import android.graphics.drawable.BitmapDrawable
 import android.util.Base64
-import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -18,7 +17,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,22 +35,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
-import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -67,7 +62,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -75,16 +69,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import androidx.media3.common.C
@@ -93,7 +87,6 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -103,19 +96,19 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.request.SuccessResult
 import com.github.libretube.api.HyperStreamData
-import com.github.libretube.api.YouTubeInnertubeClient
+import com.github.libretube.api.PIPED_USER_AGENT
 import com.github.libretube.ui.models.formatDuration
-import com.github.libretube.ui.theme.IosCyanTint
-import com.github.libretube.ui.theme.IosElectricBlue
-import com.github.libretube.ui.theme.IosLabelPrimary
-import com.github.libretube.ui.theme.IosLabelSecondary
-import com.github.libretube.ui.theme.IosMintGreen
-import com.github.libretube.ui.theme.IosOledBlack
-import com.github.libretube.ui.theme.IosSurfacePrimary
-import com.github.libretube.ui.theme.IosSurfaceSecondary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import kotlin.math.max
 
@@ -127,9 +120,8 @@ private fun buildFallbackMediaSource(
     isAudioOnly: Boolean
 ): MediaSource? {
     val targetUrl = directStreamUrl ?: stream.hlsUrl ?: directAudioUrl ?: return null
-    val userAgent = YouTubeInnertubeClient.resolveUserAgentForUrl(targetUrl)
     val httpFactory = DefaultHttpDataSource.Factory()
-        .setUserAgent(userAgent)
+        .setUserAgent(PIPED_USER_AGENT)
         .setAllowCrossProtocolRedirects(true)
 
     val isHls = targetUrl.contains(".m3u8") || stream.isLive
@@ -150,11 +142,7 @@ private fun buildFallbackMediaSource(
         directAudioUrl != targetUrl
 
     return if (needsSeparateAudio && directAudioUrl != null) {
-        val audioAgent = YouTubeInnertubeClient.resolveUserAgentForUrl(directAudioUrl)
-        val audioHttpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(audioAgent)
-            .setAllowCrossProtocolRedirects(true)
-        val audioSource = ProgressiveMediaSource.Factory(audioHttpFactory)
+        val audioSource = ProgressiveMediaSource.Factory(httpFactory)
             .createMediaSource(MediaItem.fromUri(directAudioUrl.toUri()))
         MergingMediaSource(videoSource, audioSource)
     } else {
@@ -163,98 +151,84 @@ private fun buildFallbackMediaSource(
 }
 
 /**
- * Extracts a vibrant ambient color from a tiny 32x18 sampled video frame so the
- * Ambient Mode aura matches the live video scene colors (like pink/magenta in YOASOBI Idol).
+ * Samples the static thumbnail once in the background when a new video loads to obtain a
+ * soft vignette tint color without running any per-frame GPU blur shaders or TextureView polling.
  */
-private fun extractVibrantColor(bitmap: Bitmap): Color {
-    val width = bitmap.width
-    val height = bitmap.height
-    if (width <= 0 || height <= 0) return Color(0xFFE05297)
+private suspend fun sampleThumbnailVignetteColor(
+    context: android.content.Context,
+    thumbnailUrl: String
+): Color = withContext(Dispatchers.IO) {
+    if (thumbnailUrl.isBlank()) return@withContext Color(0xFF4F7CFF)
+    runCatching {
+        val loader = ImageLoader(context)
+        val request = ImageRequest.Builder(context)
+            .data(thumbnailUrl)
+            .size(48, 27)
+            .allowHardware(false)
+            .build()
+        val result = loader.execute(request)
+        val bmp = (result as? SuccessResult)?.drawable?.let { it as? BitmapDrawable }?.bitmap
+            ?: return@withContext Color(0xFF4F7CFF)
 
-    var rSum = 0f
-    var gSum = 0f
-    var bSum = 0f
-    var weightSum = 0f
+        var rSum = 0f
+        var gSum = 0f
+        var bSum = 0f
+        var weightSum = 0f
+        val stepX = max(1, bmp.width / 8)
+        val stepY = max(1, bmp.height / 6)
 
-    val stepX = max(1, width / 8)
-    val stepY = max(1, height / 6)
-
-    for (y in 0 until height step stepY) {
-        for (x in 0 until width step stepX) {
-            val pixel = bitmap.getPixel(x, y)
-            val r = ((pixel shr 16) and 0xFF) / 255f
-            val g = ((pixel shr 8) and 0xFF) / 255f
-            val b = (pixel and 0xFF) / 255f
-
-            val maxC = maxOf(r, g, b)
-            val minC = minOf(r, g, b)
-            val saturation = if (maxC > 0.05f) (maxC - minC) / maxC else 0f
-            val luma = 0.299f * r + 0.587f * g + 0.114f * b
-
-            // Weight vibrant, non-black, non-white pixels more heavily
-            val weight = if (luma in 0.12f..0.92f) (0.35f + saturation * 2.4f) else 0.1f
-            rSum += r * weight
-            gSum += g * weight
-            bSum += b * weight
-            weightSum += weight
+        for (y in 0 until bmp.height step stepY) {
+            for (x in 0 until bmp.width step stepX) {
+                val pixel = bmp.getPixel(x, y)
+                val r = ((pixel shr 16) and 0xFF) / 255f
+                val g = ((pixel shr 8) and 0xFF) / 255f
+                val b = (pixel and 0xFF) / 255f
+                val maxC = maxOf(r, g, b)
+                val minC = minOf(r, g, b)
+                val sat = if (maxC > 0.05f) (maxC - minC) / maxC else 0f
+                val luma = 0.299f * r + 0.587f * g + 0.114f * b
+                val w = if (luma in 0.12f..0.90f) (0.3f + sat * 2.2f) else 0.08f
+                rSum += r * w
+                gSum += g * w
+                bSum += b * w
+                weightSum += w
+            }
         }
-    }
-
-    if (weightSum <= 0f) return Color(0xFFE05297)
-    val finalR = (rSum / weightSum).coerceIn(0.15f, 1f)
-    val finalG = (gSum / weightSum).coerceIn(0.12f, 1f)
-    val finalB = (bSum / weightSum).coerceIn(0.15f, 1f)
-    return Color(finalR, finalG, finalB)
-}
-
-private fun updateTextureViewScale(textureView: TextureView, videoWidth: Int, videoHeight: Int) {
-    val viewWidth = textureView.width.toFloat()
-    val viewHeight = textureView.height.toFloat()
-    if (viewWidth <= 0f || viewHeight <= 0f || videoWidth <= 0 || videoHeight <= 0) return
-
-    val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
-    val viewAspect = viewWidth / viewHeight
-
-    var scaleX = 1f
-    var scaleY = 1f
-    if (videoAspect > viewAspect) {
-        scaleY = viewAspect / videoAspect
-    } else {
-        scaleX = videoAspect / viewAspect
-    }
-
-    val matrix = Matrix()
-    matrix.setScale(scaleX, scaleY, viewWidth / 2f, viewHeight / 2f)
-    textureView.setTransform(matrix)
+        if (weightSum <= 0f) Color(0xFF4F7CFF)
+        else Color(
+            red = (rSum / weightSum).coerceIn(0.18f, 0.95f),
+            green = (gSum / weightSum).coerceIn(0.16f, 0.95f),
+            blue = (bSum / weightSum).coerceIn(0.20f, 0.98f)
+        )
+    }.getOrDefault(Color(0xFF4F7CFF))
 }
 
 @OptIn(UnstableApi::class)
 @Composable
 fun IosVideoPlayerStage(
     stream: HyperStreamData?,
+    isLoadingStream: Boolean = false,
     dashDataUri: String?,
     directStreamUrl: String?,
     directAudioUrl: String?,
-    availableQualities: List<Int>,
     selectedQualityHeight: Int,
+    selectedQualityLabel: String,
     playbackSpeed: Float,
     isAudioOnly: Boolean,
     isAmbientModeEnabled: Boolean = true,
     onToggleAmbientMode: () -> Unit = {},
-    onAmbientColorChanged: (Color) -> Unit = {},
     startTimestampSeconds: Long,
     seekRequestSeconds: Long?,
     onSeekRequestConsumed: () -> Unit,
-    onSelectQuality: (Int) -> Unit,
-    onSelectSpeed: (Float) -> Unit,
     onToggleAudioOnly: () -> Unit,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
-    showExternalScrubber: Boolean = true,
+    onQuickPlayDefault: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
 
+    // Single persistent ExoPlayer + PlayerView retained across video ID switches
     val exoPlayer = remember {
         ExoPlayer.Builder(context)
             .setSeekBackIncrementMs(10_000L)
@@ -265,28 +239,47 @@ fun IosVideoPlayerStage(
             }
     }
 
+    val persistentPlayerView = remember {
+        PlayerView(context).apply {
+            useController = false
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            keepScreenOn = true
+        }
+    }
+
+    DisposableEffect(exoPlayer, persistentPlayerView) {
+        persistentPlayerView.player = exoPlayer
+        onDispose {
+            persistentPlayerView.player = null
+            exoPlayer.release()
+        }
+    }
+
     var isPlaying by remember { mutableStateOf(false) }
     var isBuffering by remember { mutableStateOf(false) }
-    var currentPosMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
     var controlsVisible by remember { mutableStateOf(false) }
     var lastLoadedVideoId by remember { mutableStateOf<String?>(null) }
     var usedFallbackForCurrentConfig by remember { mutableStateOf(false) }
-    var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
-    var videoWidth by remember { mutableStateOf(16) }
-    var videoHeight by remember { mutableStateOf(9) }
-    var liveAmbientBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-    var targetAmbientColor by remember { mutableStateOf(Color(0xFFE05297)) }
+    var vignetteTint by remember { mutableStateOf(Color(0xFF4F7CFF)) }
 
-    val animatedAmbientColor by animateColorAsState(
-        targetValue = if (isAmbientModeEnabled && stream != null) targetAmbientColor else Color.Transparent,
-        animationSpec = tween(durationMillis = 750),
-        label = "ambient_scene_color"
-    )
-
-    LaunchedEffect(animatedAmbientColor) {
-        onAmbientColorChanged(animatedAmbientColor)
+    LaunchedEffect(stream?.videoId, stream?.thumbnailUrl) {
+        val thumb = stream?.thumbnailUrl.orEmpty()
+        vignetteTint = if (thumb.isNotBlank()) {
+            sampleThumbnailVignetteColor(context, thumb)
+        } else {
+            Color(0xFF4F7CFF)
+        }
     }
+
+    val animatedVignetteColor by animateColorAsState(
+        targetValue = if (isAmbientModeEnabled && stream != null) vignetteTint else Color.Transparent,
+        animationSpec = tween(durationMillis = 700),
+        label = "vignette_color"
+    )
 
     DisposableEffect(exoPlayer, stream, directStreamUrl, directAudioUrl, isAudioOnly) {
         val listener = object : Player.Listener {
@@ -296,19 +289,6 @@ fun IosVideoPlayerStage(
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
-                if (playbackState == Player.STATE_READY) {
-                    durationMs = exoPlayer.duration.coerceAtLeast(0L)
-                }
-            }
-
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                if (videoSize.width > 0 && videoSize.height > 0) {
-                    videoWidth = videoSize.width
-                    videoHeight = videoSize.height
-                    textureViewRef?.let { tv ->
-                        updateTextureViewScale(tv, videoSize.width, videoSize.height)
-                    }
-                }
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -335,12 +315,6 @@ fun IosVideoPlayerStage(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            exoPlayer.release()
-        }
-    }
-
     LaunchedEffect(playbackSpeed) {
         exoPlayer.playbackParameters = PlaybackParameters(playbackSpeed)
     }
@@ -358,7 +332,6 @@ fun IosVideoPlayerStage(
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
             lastLoadedVideoId = null
-            liveAmbientBitmap = null
             return@LaunchedEffect
         }
 
@@ -367,7 +340,6 @@ fun IosVideoPlayerStage(
         val resumePositionMs = if (isSameVideo) {
             exoPlayer.currentPosition.coerceAtLeast(0L)
         } else {
-            liveAmbientBitmap = null
             startTimestampSeconds * 1000L
         }
         lastLoadedVideoId = stream.videoId
@@ -385,21 +357,26 @@ fun IosVideoPlayerStage(
 
         val dashSource = if (!isAudioOnly && !dashDataUri.isNullOrBlank()) {
             runCatching {
-                val rawXml = if (dashDataUri.startsWith("data:application/dash+xml")) {
-                    val base64Part = dashDataUri.substringAfter("base64,")
-                    String(Base64.decode(base64Part, Base64.DEFAULT), Charsets.UTF_8)
-                } else {
-                    dashDataUri
-                }
-                val manifest = DashManifestParser().parse(
-                    "https://www.youtube.com".toUri(),
-                    ByteArrayInputStream(rawXml.toByteArray(Charsets.UTF_8))
-                )
-                val userAgent = YouTubeInnertubeClient.resolveUserAgentForUrl(directStreamUrl ?: rawXml)
                 val dashHttpFactory = DefaultHttpDataSource.Factory()
-                    .setUserAgent(userAgent)
+                    .setUserAgent(PIPED_USER_AGENT)
                     .setAllowCrossProtocolRedirects(true)
-                DashMediaSource.Factory(dashHttpFactory).createMediaSource(manifest)
+
+                if (dashDataUri.startsWith("http://") || dashDataUri.startsWith("https://")) {
+                    DashMediaSource.Factory(dashHttpFactory)
+                        .createMediaSource(MediaItem.fromUri(dashDataUri.toUri()))
+                } else {
+                    val rawXml = if (dashDataUri.startsWith("data:application/dash+xml")) {
+                        val base64Part = dashDataUri.substringAfter("base64,")
+                        String(Base64.decode(base64Part, Base64.DEFAULT), Charsets.UTF_8)
+                    } else {
+                        dashDataUri
+                    }
+                    val manifest = DashManifestParser().parse(
+                        "https://www.youtube.com".toUri(),
+                        ByteArrayInputStream(rawXml.toByteArray(Charsets.UTF_8))
+                    )
+                    DashMediaSource.Factory(dashHttpFactory).createMediaSource(manifest)
+                }
             }.getOrNull()
         } else {
             null
@@ -425,33 +402,6 @@ fun IosVideoPlayerStage(
         }
     }
 
-    // Poll playback position & sample live video frame for Real-Time Ambient Mode
-    LaunchedEffect(isPlaying, stream?.videoId, isAmbientModeEnabled, isAudioOnly) {
-        var tick = 0
-        while (stream != null) {
-            currentPosMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-            val d = exoPlayer.duration
-            if (d != C.TIME_UNSET && d > 0) {
-                durationMs = d
-            }
-
-            if (isAmbientModeEnabled && !isAudioOnly && isPlaying && tick % 2 == 0) {
-                val tv = textureViewRef
-                if (tv != null && tv.isAvailable && tv.width > 0 && tv.height > 0) {
-                    runCatching {
-                        val smallBmp = tv.getBitmap(40, 24)
-                        if (smallBmp != null) {
-                            targetAmbientColor = extractVibrantColor(smallBmp)
-                            liveAmbientBitmap = smallBmp.asImageBitmap()
-                        }
-                    }
-                }
-            }
-            tick++
-            delay(200L)
-        }
-    }
-
     // Auto-hide controls after 3.2 seconds when playing
     LaunchedEffect(controlsVisible, isPlaying) {
         if (controlsVisible && isPlaying) {
@@ -460,20 +410,13 @@ fun IosVideoPlayerStage(
         }
     }
 
-    val containerShape = if (isFullscreen) RoundedCornerShape(0.dp) else RoundedCornerShape(26.dp)
-    val totalDurationSec = if (stream != null) {
-        (durationMs / 1000L).coerceAtLeast(stream.durationSeconds)
-    } else 0L
-    val currentSec = (currentPosMs / 1000L).coerceAtLeast(0L)
-    val progressFraction = if (totalDurationSec > 0) {
-        (currentPosMs.toFloat() / (totalDurationSec * 1000f)).coerceIn(0f, 1f)
-    } else 0f
+    val containerShape = if (isFullscreen) RoundedCornerShape(0.dp) else RoundedCornerShape(24.dp)
 
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Video Player Frame + Real-Time Ambient Glow Layer
+        // 16:9 Video Container with Subtle Performant Radial Vignette (alpha <= 0.25f, zero GPU blur shaders)
         Box(
             modifier = Modifier
                 .then(
@@ -481,380 +424,328 @@ fun IosVideoPlayerStage(
                     else Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f)
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            // Layer 1: Real-Time Ambient Mode Halo bleeding outside the rounded video card
-            if (isAmbientModeEnabled && !isFullscreen && stream != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = 1.07f
-                            scaleY = 1.11f
-                            alpha = 0.72f
-                        }
-                        .drawBehind {
-                            drawRoundRect(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        animatedAmbientColor.copy(alpha = 0.62f),
-                                        animatedAmbientColor.copy(alpha = 0.28f),
-                                        Color.Transparent
-                                    ),
-                                    center = Offset(size.width / 2f, size.height / 2f),
-                                    radius = size.width * 0.68f
+                )
+                .drawBehind {
+                    if (!isFullscreen && animatedVignetteColor.alpha > 0.01f) {
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    animatedVignetteColor.copy(alpha = 0.25f),
+                                    animatedVignetteColor.copy(alpha = 0.10f),
+                                    Color.Transparent
                                 ),
-                                cornerRadius = CornerRadius(36.dp.toPx(), 36.dp.toPx())
-                            )
-                        }
-                        .blur(46.dp)
-                ) {
-                    val bmp = liveAmbientBitmap
-                    if (bmp != null) {
-                        Image(
-                            bitmap = bmp,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            filterQuality = FilterQuality.Medium,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(32.dp))
-                        )
-                    } else {
-                        AsyncImage(
-                            model = stream.thumbnailUrl,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(32.dp))
+                                center = Offset(size.width / 2f, size.height / 2f),
+                                radius = size.width * 0.62f
+                            ),
+                            center = Offset(size.width / 2f, size.height / 2f),
+                            radius = size.width * 0.62f
                         )
                     }
                 }
-            }
-
-            // Layer 2: Crisp Rounded Video Card
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(containerShape)
-                    .background(IosOledBlack)
-                    .border(
-                        width = if (isFullscreen) 0.dp else 1.dp,
-                        color = Color.White.copy(alpha = 0.14f),
-                        shape = containerShape
-                    )
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
+                .clip(containerShape)
+                .background(Color(0xFF090A0D))
+                .border(
+                    width = if (isFullscreen) 0.dp else 0.5.dp,
+                    color = Color.White.copy(alpha = 0.08f),
+                    shape = containerShape
+                )
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    if (stream != null) {
                         controlsVisible = !controlsVisible
+                    } else if (!isLoadingStream) {
+                        onQuickPlayDefault()
                     }
-                    .testTag("video_player_stage")
-            ) {
-                if (stream != null) {
-                    if (isAudioOnly) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AsyncImage(
-                                model = stream.thumbnailUrl,
-                                contentDescription = stream.title,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer { alpha = 0.32f }
-                            )
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = !controlsVisible,
-                                enter = fadeIn(),
-                                exit = fadeOut()
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                    modifier = Modifier.padding(24.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(68.dp)
-                                            .clip(RoundedCornerShape(20.dp))
-                                            .background(Color.White.copy(alpha = 0.12f))
-                                            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.GraphicEq,
-                                            contentDescription = "Audio Stream Active",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(34.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Text(
-                                        text = "Audio-Only Mode",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = IosLabelPrimary
-                                    )
-                                    Text(
-                                        text = stream.uploaderName,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = IosLabelSecondary
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        AndroidView(
-                            factory = { ctx ->
-                                FrameLayout(ctx).apply {
-                                    layoutParams = FrameLayout.LayoutParams(
-                                        ViewGroup.LayoutParams.MATCH_PARENT,
-                                        ViewGroup.LayoutParams.MATCH_PARENT
-                                    )
-                                    val tv = TextureView(ctx).apply {
-                                        layoutParams = FrameLayout.LayoutParams(
-                                            ViewGroup.LayoutParams.MATCH_PARENT,
-                                            ViewGroup.LayoutParams.MATCH_PARENT
-                                        )
-                                        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-                                            updateTextureViewScale(this, videoWidth, videoHeight)
-                                        }
-                                    }
-                                    addView(tv)
-                                    textureViewRef = tv
-                                    exoPlayer.setVideoTextureView(tv)
-                                }
-                            },
-                            update = { container ->
-                                val tv = container.getChildAt(0) as? TextureView
-                                if (tv != null && textureViewRef !== tv) {
-                                    textureViewRef = tv
-                                    exoPlayer.setVideoTextureView(tv)
-                                }
-                                if (tv != null) {
-                                    updateTextureViewScale(tv, videoWidth, videoHeight)
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
+                }
+                .testTag("video_player_stage"),
+            contentAlignment = Alignment.Center
+        ) {
+            // Persistent PlayerView kept mounted inside the hierarchy to prevent surface detachment
+            AndroidView(
+                factory = { ctx ->
+                    FrameLayout(ctx).apply {
+                        layoutParams = FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        (persistentPlayerView.parent as? ViewGroup)?.removeView(persistentPlayerView)
+                        addView(persistentPlayerView)
+                    }
+                },
+                update = { container ->
+                    if (persistentPlayerView.parent !== container) {
+                        (persistentPlayerView.parent as? ViewGroup)?.removeView(persistentPlayerView)
+                        container.addView(persistentPlayerView)
+                    }
+                    persistentPlayerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    persistentPlayerView.visibility =
+                        if (stream != null && !isAudioOnly) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            if (stream == null) {
+                // Standby or Loading State inside the 16:9 Stage
+                if (isLoadingStream) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.5.dp,
+                            modifier = Modifier.size(34.dp)
+                        )
+                        Text(
+                            text = "Fetching Stream via Piped API…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.7f)
                         )
                     }
-
-                    // Minimal Buffering Indicator
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = isBuffering,
-                        enter = fadeIn() + scaleIn(),
-                        exit = fadeOut() + scaleOut(),
-                        modifier = Modifier.align(Alignment.Center)
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(24.dp)
                     ) {
-                        Box(
+                        Icon(
+                            imageVector = Icons.Rounded.SmartDisplay,
+                            contentDescription = "HyperTube",
+                            tint = Color.White.copy(alpha = 0.72f),
+                            modifier = Modifier.size(38.dp)
+                        )
+                        Text(
+                            text = "Tap to play or select a stream from the dock",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.64f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                // Audio-Only Backdrop
+                if (isAudioOnly) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = stream.thumbnailUrl,
+                            contentDescription = stream.title,
+                            contentScale = ContentScale.Crop,
                             modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.65f)),
-                            contentAlignment = Alignment.Center
+                                .fillMaxSize()
+                                .graphicsLayer { alpha = 0.28f }
+                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(24.dp)
                         ) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                strokeWidth = 2.5.dp,
-                                modifier = Modifier.size(28.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(Color.White.copy(alpha = 0.12f))
+                                    .border(0.5.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(20.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.GraphicEq,
+                                    contentDescription = "Audio Stream Active",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Audio-Only Stream",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White
+                            )
+                            Text(
+                                text = stream.uploaderName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.68f)
                             )
                         }
                     }
+                }
 
-                    // Minimal iOS Controls Overlay (Only appears on tap)
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = controlsVisible,
-                        enter = fadeIn(spring(stiffness = Spring.StiffnessMediumLow)),
-                        exit = fadeOut(spring(stiffness = Spring.StiffnessMediumLow)),
-                        modifier = Modifier.fillMaxSize()
+                // Buffering Spinner
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isBuffering,
+                    enter = fadeIn() + scaleIn(),
+                    exit = fadeOut() + scaleOut(),
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.60f)),
+                        contentAlignment = Alignment.Center
                     ) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.5.dp,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                }
+
+                // Minimal HyperOS Transport Overlay
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = controlsVisible,
+                    enter = fadeIn(spring(stiffness = Spring.StiffnessMediumLow)),
+                    exit = fadeOut(spring(stiffness = Spring.StiffnessMediumLow)),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Black.copy(alpha = 0.54f),
+                                        Color.Black.copy(alpha = 0.16f),
+                                        Color.Black.copy(alpha = 0.60f)
+                                    )
+                                )
+                            )
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        // Top-Right Quick Toggles (Ambient, Audio-Only, Active Quality/Speed Badge)
+                        Row(
+                            modifier = Modifier.align(Alignment.TopEnd),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            HyperOsControlPill(
+                                label = if (isAmbientModeEnabled) "Vignette ON" else "Vignette OFF",
+                                isActive = isAmbientModeEnabled,
+                                onClick = onToggleAmbientMode,
+                                testTag = "ambient_mode_toggle_pill"
+                            )
+
+                            HyperOsControlPill(
+                                label = if (isAudioOnly) "Audio ON" else "Audio Only",
+                                isActive = isAudioOnly,
+                                onClick = onToggleAudioOnly,
+                                testTag = "audio_only_toggle_pill"
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(Color.White.copy(alpha = 0.16f))
+                                    .padding(horizontal = 11.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "$selectedQualityLabel • ${String.format(java.util.Locale.US, "%.2fx", playbackSpeed).trimEnd('0').trimEnd('.')}x",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        // Center Transport Controls
+                        Row(
+                            modifier = Modifier.align(Alignment.Center),
+                            horizontalArrangement = Arrangement.spacedBy(28.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SpringIconButton(
+                                onClick = { exoPlayer.seekBack() },
+                                testTag = "player_rewind_button"
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Replay10,
+                                    contentDescription = "Rewind 10 seconds",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+
+                            SpringIconButton(
+                                onClick = {
+                                    if (exoPlayer.isPlaying) {
+                                        exoPlayer.pause()
+                                    } else {
+                                        exoPlayer.play()
+                                    }
+                                },
+                                sizeDp = 60,
+                                backgroundColor = Color.White.copy(alpha = 0.22f),
+                                testTag = "player_play_pause_button"
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+
+                            SpringIconButton(
+                                onClick = { exoPlayer.seekForward() },
+                                testTag = "player_forward_button"
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Forward10,
+                                    contentDescription = "Forward 10 seconds",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                        }
+
+                        // Bottom Fullscreen Button inside overlay
                         Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Black.copy(alpha = 0.58f),
-                                            Color.Black.copy(alpha = 0.18f),
-                                            Color.Black.copy(alpha = 0.64f)
-                                        )
-                                    )
-                                )
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .align(Alignment.BottomEnd)
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .clickable { onToggleFullscreen() }
+                                .testTag("player_fullscreen_button"),
+                            contentAlignment = Alignment.Center
                         ) {
-                            // Top-Right Minimal Pills: Ambient, Audio Only, Quality, Speed
-                            Row(
-                                modifier = Modifier.align(Alignment.TopEnd),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                IosControlPill(
-                                    label = if (isAmbientModeEnabled) "Ambient: ON" else "Ambient",
-                                    isActive = isAmbientModeEnabled,
-                                    onClick = onToggleAmbientMode,
-                                    testTag = "ambient_mode_toggle_pill"
-                                )
+                            Icon(
+                                imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                contentDescription = if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
 
-                                IosControlPill(
-                                    label = if (isAudioOnly) "Audio Only: ON" else "Audio Only",
-                                    isActive = isAudioOnly,
-                                    onClick = onToggleAudioOnly,
-                                    testTag = "audio_only_toggle_pill"
-                                )
-
-                                QualitySelectorPill(
-                                    availableQualities = availableQualities,
-                                    selectedHeight = selectedQualityHeight,
-                                    onSelectQuality = onSelectQuality
-                                )
-
-                                SpeedSelectorPill(
-                                    currentSpeed = playbackSpeed,
-                                    onSelectSpeed = onSelectSpeed
-                                )
-                            }
-
-                            // Center Transport Controls
-                            Row(
-                                modifier = Modifier.align(Alignment.Center),
-                                horizontalArrangement = Arrangement.spacedBy(28.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                SpringIconButton(
-                                    onClick = { exoPlayer.seekBack() },
-                                    testTag = "player_rewind_button"
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Replay10,
-                                        contentDescription = "Rewind 10 seconds",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-
-                                SpringIconButton(
-                                    onClick = {
-                                        if (exoPlayer.isPlaying) {
-                                            exoPlayer.pause()
-                                        } else {
-                                            exoPlayer.play()
-                                        }
-                                    },
-                                    sizeDp = 62,
-                                    backgroundColor = Color.White.copy(alpha = 0.22f),
-                                    testTag = "player_play_pause_button"
-                                ) {
-                                    Icon(
-                                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                        contentDescription = if (isPlaying) "Pause" else "Play",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(34.dp)
-                                    )
-                                }
-
-                                SpringIconButton(
-                                    onClick = { exoPlayer.seekForward() },
-                                    testTag = "player_forward_button"
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Forward10,
-                                        contentDescription = "Forward 10 seconds",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                            }
-
-                            // Bottom-Left Timecode & Bottom-Right Fullscreen inside overlay
-                            Row(
+                        if (isFullscreen) {
+                            CustomCapsuleScrubber(
+                                exoPlayer = exoPlayer,
+                                fallbackDurationSeconds = stream.durationSeconds,
+                                isStreamLoaded = true,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .align(Alignment.BottomCenter),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(
-                                        text = "${formatDuration(currentSec)} / ${formatDuration(totalDurationSec)}",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Color.White.copy(alpha = 0.9f)
-                                    )
-                                    if (selectedQualityHeight > 0 && !isAudioOnly) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(Color.White.copy(alpha = 0.16f))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = formatQualityBadge(selectedQualityHeight),
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = Color.White
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape)
-                                        .clickable { onToggleFullscreen() }
-                                        .testTag("player_fullscreen_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                                        contentDescription = if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-
-                            // In fullscreen mode, also show the glowing scrubber inside the bottom overlay
-                            if (isFullscreen) {
-                                GlowingIosScrubberBar(
-                                    progressFraction = progressFraction,
-                                    onSeekFraction = { frac ->
-                                        if (totalDurationSec > 0) {
-                                            val targetMs = (frac * totalDurationSec * 1000L).toLong()
-                                            currentPosMs = targetMs
-                                            exoPlayer.seekTo(targetMs)
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .align(Alignment.BottomCenter)
-                                        .padding(bottom = 42.dp)
-                                )
-                            }
+                                    .align(Alignment.BottomCenter)
+                                    .padding(end = 56.dp)
+                            )
                         }
                     }
                 }
             }
         }
 
-        // External Minimalist Glowing White Scrubber Bar directly below the Video Card (matching the user's mockup!)
-        if (!isFullscreen && showExternalScrubber && stream != null) {
-            GlowingIosScrubberBar(
-                progressFraction = progressFraction,
-                onSeekFraction = { frac ->
-                    if (totalDurationSec > 0) {
-                        val targetMs = (frac * totalDurationSec * 1000L).toLong()
-                        currentPosMs = targetMs
-                        exoPlayer.seekTo(targetMs)
-                    }
-                },
+        // Custom Capsule Scrubber below the video viewport (Decoupled position ticker!)
+        if (!isFullscreen) {
+            CustomCapsuleScrubber(
+                exoPlayer = exoPlayer,
+                fallbackDurationSeconds = stream?.durationSeconds ?: 0L,
+                isStreamLoaded = stream != null,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp)
                     .testTag("player_scrubber_slider")
             )
         }
@@ -862,113 +753,238 @@ fun IosVideoPlayerStage(
 }
 
 /**
- * Minimalist iOS pill progress bar with a soft glowing white bloom at the playhead tip,
- * matching the user's mockup directly below the video player.
+ * Isolated leaf composable that polls ExoPlayer position with a throttled 400ms ticker.
+ * Because state is read strictly inside this leaf composable, position ticks never trigger
+ * recompositions of the parent video stage or screen layout.
+ *
+ * Features:
+ * - Elapsed duration badge on the left (`01:24`)
+ * - Rounded pill progress track with an animated active thumb pill
+ * - Remaining duration badge on the right (`-02:18`)
  */
 @Composable
-fun GlowingIosScrubberBar(
-    progressFraction: Float,
-    onSeekFraction: (Float) -> Unit,
+fun CustomCapsuleScrubber(
+    exoPlayer: ExoPlayer,
+    fallbackDurationSeconds: Long,
+    isStreamLoaded: Boolean,
     modifier: Modifier = Modifier
 ) {
+    var currentPosMs by remember { mutableLongStateOf(0L) }
+    var durationMs by remember { mutableLongStateOf(fallbackDurationSeconds * 1000L) }
     var isDragging by remember { mutableStateOf(false) }
-    var dragFraction by remember { mutableFloatStateOf(progressFraction) }
-    val activeFraction = if (isDragging) dragFraction else progressFraction
+    var dragFraction by remember { mutableFloatStateOf(0f) }
 
-    Box(
+    LaunchedEffect(exoPlayer, isStreamLoaded, fallbackDurationSeconds) {
+        if (!isStreamLoaded) {
+            currentPosMs = 0L
+            durationMs = 0L
+            return@LaunchedEffect
+        }
+        while (isActive) {
+            if (!isDragging) {
+                currentPosMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+            }
+            val playerDur = exoPlayer.duration
+            durationMs = if (playerDur != C.TIME_UNSET && playerDur > 0L) {
+                playerDur
+            } else {
+                (fallbackDurationSeconds * 1000L).coerceAtLeast(0L)
+            }
+            delay(400L)
+        }
+    }
+
+    val totalSec = (durationMs / 1000L).coerceAtLeast(fallbackDurationSeconds).coerceAtLeast(0L)
+    val liveFraction = if (totalSec > 0L) {
+        (currentPosMs.toFloat() / (totalSec * 1000f)).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val displayedFraction by animateFloatAsState(
+        targetValue = if (isDragging) dragFraction else liveFraction,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "scrubber_fraction"
+    )
+
+    val activeTrackHeight by animateDpAsState(
+        targetValue = if (isDragging) 10.dp else 7.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        label = "scrubber_track_height"
+    )
+
+    val thumbWidth by animateDpAsState(
+        targetValue = if (isDragging) 24.dp else 16.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        label = "scrubber_thumb_width"
+    )
+
+    val thumbHeight by animateDpAsState(
+        targetValue = if (isDragging) 14.dp else 11.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        label = "scrubber_thumb_height"
+    )
+
+    val activeSec = if (isDragging && totalSec > 0L) {
+        (dragFraction * totalSec).toLong()
+    } else {
+        (currentPosMs / 1000L).coerceAtLeast(0L)
+    }
+    val remainingSec = (totalSec - activeSec).coerceAtLeast(0L)
+
+    Row(
         modifier = modifier
-            .height(28.dp)
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                    onSeekFraction(frac)
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Elapsed Duration Capsule Badge
+        Box(
+            modifier = Modifier
+                .widthIn(min = 52.dp)
+                .height(24.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Color(0xFF1A1D24))
+                .border(0.5.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(50))
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = formatDuration(activeSec),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = Color.White.copy(alpha = 0.88f)
+            )
+        }
+
+        // Rounded Pill Progress Track + Animated Active Thumb Pill
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(28.dp)
+                .pointerInput(isStreamLoaded, totalSec) {
+                    if (!isStreamLoaded || totalSec <= 0L) return@pointerInput
+                    detectTapGestures { offset ->
+                        val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        val targetMs = (frac * totalSec * 1000L).toLong()
+                        currentPosMs = targetMs
+                        exoPlayer.seekTo(targetMs)
+                    }
+                }
+                .pointerInput(isStreamLoaded, totalSec) {
+                    if (!isStreamLoaded || totalSec <= 0L) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset ->
+                            isDragging = true
+                            dragFraction = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        },
+                        onDragEnd = {
+                            val targetMs = (dragFraction * totalSec * 1000L).toLong()
+                            currentPosMs = targetMs
+                            exoPlayer.seekTo(targetMs)
+                            isDragging = false
+                        },
+                        onDragCancel = {
+                            isDragging = false
+                        },
+                        onHorizontalDrag = { change, _ ->
+                            change.consume()
+                            dragFraction = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        }
+                    )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
+            ) {
+                val trackH = activeTrackHeight.toPx()
+                val trackTop = (size.height - trackH) / 2f
+                val trackCorner = CornerRadius(trackH / 2f, trackH / 2f)
+
+                // Background capsule track
+                drawRoundRect(
+                    color = Color.White.copy(alpha = 0.16f),
+                    topLeft = Offset(0f, trackTop),
+                    size = Size(size.width, trackH),
+                    cornerRadius = trackCorner
+                )
+
+                if (isStreamLoaded) {
+                    val filledW = (size.width * displayedFraction).coerceIn(trackH, size.width)
+
+                    // Active filled progress track
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.92f),
+                        topLeft = Offset(0f, trackTop),
+                        size = Size(filledW, trackH),
+                        cornerRadius = trackCorner
+                    )
+
+                    // Animated Active Thumb Pill
+                    val pillW = thumbWidth.toPx()
+                    val pillH = thumbHeight.toPx()
+                    val centerX = (size.width * displayedFraction).coerceIn(pillW / 2f, size.width - pillW / 2f)
+                    val pillTop = (size.height - pillH) / 2f
+
+                    // Subtle halo around active thumb pill
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = if (isDragging) 0.45f else 0.25f),
+                                Color.Transparent
+                            ),
+                            center = Offset(centerX, size.height / 2f),
+                            radius = pillW * 1.1f
+                        ),
+                        center = Offset(centerX, size.height / 2f),
+                        radius = pillW * 1.1f
+                    )
+
+                    drawRoundRect(
+                        color = Color.White,
+                        topLeft = Offset(centerX - pillW / 2f, pillTop),
+                        size = Size(pillW, pillH),
+                        cornerRadius = CornerRadius(pillH / 2f, pillH / 2f)
+                    )
                 }
             }
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        isDragging = true
-                        dragFraction = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                    },
-                    onDragEnd = {
-                        onSeekFraction(dragFraction)
-                        isDragging = false
-                    },
-                    onDragCancel = {
-                        isDragging = false
-                    },
-                    onHorizontalDrag = { change, _ ->
-                        change.consume()
-                        dragFraction = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
-                        onSeekFraction(dragFraction)
-                    }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(
+        }
+
+        // Remaining Duration Capsule Badge
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(if (isDragging) 11.dp else 8.dp)
+                .widthIn(min = 56.dp)
+                .height(24.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Color(0xFF1A1D24))
+                .border(0.5.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(50))
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center
         ) {
-            val trackHeight = size.height
-            val cornerRadius = CornerRadius(trackHeight / 2f, trackHeight / 2f)
-
-            // Unfilled muted background track
-            drawRoundRect(
-                color = Color.White.copy(alpha = 0.24f),
-                size = Size(size.width, trackHeight),
-                cornerRadius = cornerRadius
-            )
-
-            val filledWidth = (size.width * activeFraction.coerceIn(0.015f, 1f))
-
-            // Soft white outer bloom at the leading tip of the progress bar (matching mockup!)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.85f),
-                        Color.White.copy(alpha = 0.35f),
-                        Color.Transparent
-                    ),
-                    center = Offset(filledWidth, trackHeight / 2f),
-                    radius = trackHeight * 2.8f
+            Text(
+                text = "-${formatDuration(remainingSec)}",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
                 ),
-                center = Offset(filledWidth, trackHeight / 2f),
-                radius = trackHeight * 2.8f
-            )
-
-            // Crisp pure white filled track
-            drawRoundRect(
-                color = Color.White,
-                size = Size(filledWidth, trackHeight),
-                cornerRadius = cornerRadius
+                color = Color.White.copy(alpha = 0.65f)
             )
         }
     }
-}
-
-private fun formatQualityBadge(height: Int): String = when {
-    height >= 2160 -> "${height}p 4K"
-    height >= 1440 -> "${height}p QHD"
-    height >= 1080 -> "${height}p FHD"
-    height >= 720 -> "${height}p HD"
-    else -> "${height}p"
-}
-
-private fun formatQualityMenuLabel(height: Int): String = when {
-    height >= 2160 -> "${height}p (4K UHD)"
-    height >= 1440 -> "${height}p (2K QHD)"
-    height >= 1080 -> "${height}p (Full HD)"
-    height >= 720 -> "${height}p (HD)"
-    else -> "${height}p"
 }
 
 @Composable
 private fun SpringIconButton(
     onClick: () -> Unit,
     sizeDp: Int = 48,
-    backgroundColor: Color = Color.Black.copy(alpha = 0.5f),
+    backgroundColor: Color = Color.Black.copy(alpha = 0.50f),
     testTag: String,
     content: @Composable () -> Unit
 ) {
@@ -992,7 +1008,7 @@ private fun SpringIconButton(
             }
             .clip(CircleShape)
             .background(backgroundColor)
-            .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape)
+            .border(0.5.dp, Color.White.copy(alpha = 0.22f), CircleShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -1006,7 +1022,7 @@ private fun SpringIconButton(
 }
 
 @Composable
-private fun IosControlPill(
+private fun HyperOsControlPill(
     label: String,
     isActive: Boolean,
     onClick: () -> Unit,
@@ -1014,14 +1030,15 @@ private fun IosControlPill(
 ) {
     Box(
         modifier = Modifier
-            .height(32.dp)
+            .height(30.dp)
             .clip(RoundedCornerShape(50))
             .background(
-                if (isActive) Color.White.copy(alpha = 0.28f) else Color.Black.copy(alpha = 0.55f)
+                if (isActive) Color.White.copy(alpha = 0.24f)
+                else Color.Black.copy(alpha = 0.52f)
             )
             .border(
-                width = 1.dp,
-                color = if (isActive) Color.White.copy(alpha = 0.6f) else Color.White.copy(alpha = 0.18f),
+                width = 0.5.dp,
+                color = if (isActive) Color.White.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.16f),
                 shape = RoundedCornerShape(50)
             )
             .clickable(onClick = onClick)
@@ -1032,136 +1049,7 @@ private fun IosControlPill(
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
             color = Color.White
         )
-    }
-}
-
-@Composable
-private fun QualitySelectorPill(
-    availableQualities: List<Int>,
-    selectedHeight: Int,
-    onSelectQuality: (Int) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            modifier = Modifier
-                .height(32.dp)
-                .clip(RoundedCornerShape(50))
-                .background(Color.Black.copy(alpha = 0.55f))
-                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))
-                .clickable { expanded = true }
-                .padding(horizontal = 11.dp)
-                .testTag("quality_selector_pill"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.HighQuality,
-                contentDescription = "Video Quality",
-                tint = Color.White,
-                modifier = Modifier.size(15.dp)
-            )
-            Text(
-                text = if (selectedHeight > 0) "${selectedHeight}p" else "Auto",
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White
-            )
-        }
-
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(Color(0xFF1C1C1E))
-        ) {
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        text = "Auto (Best Adaptive)",
-                        color = if (selectedHeight == 0) IosElectricBlue else IosLabelPrimary,
-                        fontWeight = if (selectedHeight == 0) FontWeight.Bold else FontWeight.Normal
-                    )
-                },
-                onClick = {
-                    onSelectQuality(0)
-                    expanded = false
-                }
-            )
-            availableQualities.forEach { q ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = formatQualityMenuLabel(q),
-                            color = if (selectedHeight == q) IosElectricBlue else IosLabelPrimary,
-                            fontWeight = if (selectedHeight == q) FontWeight.Bold else FontWeight.Normal
-                        )
-                    },
-                    onClick = {
-                        onSelectQuality(q)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SpeedSelectorPill(
-    currentSpeed: Float,
-    onSelectSpeed: (Float) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
-
-    Box {
-        Row(
-            modifier = Modifier
-                .height(32.dp)
-                .clip(RoundedCornerShape(50))
-                .background(Color.Black.copy(alpha = 0.55f))
-                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))
-                .clickable { expanded = true }
-                .padding(horizontal = 11.dp)
-                .testTag("speed_selector_pill"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Speed,
-                contentDescription = "Playback Speed",
-                tint = Color.White,
-                modifier = Modifier.size(15.dp)
-            )
-            Text(
-                text = "${currentSpeed}x",
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White
-            )
-        }
-
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(Color(0xFF1C1C1E))
-        ) {
-            speeds.forEach { spd ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = "${spd}x",
-                            color = if (currentSpeed == spd) IosElectricBlue else IosLabelPrimary,
-                            fontWeight = if (currentSpeed == spd) FontWeight.Bold else FontWeight.Normal
-                        )
-                    },
-                    onClick = {
-                        onSelectSpeed(spd)
-                        expanded = false
-                    }
-                )
-            }
-        }
     }
 }

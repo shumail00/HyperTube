@@ -30,8 +30,47 @@ data class StreamFormat(
     val audioTrackType: String? = null,
     val audioLocale: String? = null,
     val itag: Int? = null,
-    val userAgent: String = YouTubeInnertubeClient.USER_AGENT_ANDROID_VR
+    val userAgent: String = PIPED_USER_AGENT
 )
+
+data class QualityStepOption(
+    val height: Int,
+    val fps: Int,
+    val label: String
+)
+
+fun buildDeduplicatedQualitySteps(
+    adaptiveStreams: List<StreamFormat>,
+    muxedStreams: List<StreamFormat>
+): List<QualityStepOption> {
+    val combined = (adaptiveStreams + muxedStreams).filter { it.height > 0 }
+    if (combined.isEmpty()) return emptyList()
+
+    return combined
+        .groupBy { it.height }
+        .map { (height, candidates) ->
+            // Prefer 60fps+ over 30fps, then highest bitrate
+            val best = candidates.maxWithOrNull(
+                compareBy<StreamFormat> { it.fps >= 50 }
+                    .thenBy { it.fps }
+                    .thenBy { it.bitrate }
+            ) ?: candidates.first()
+
+            val displayFps = best.fps.coerceAtLeast(30)
+            val label = when {
+                height >= 2160 && displayFps >= 50 -> "4K60"
+                height >= 2160 -> "4K"
+                displayFps >= 50 -> "${height}p60"
+                else -> "${height}p"
+            }
+            QualityStepOption(
+                height = height,
+                fps = displayFps,
+                label = label
+            )
+        }
+        .sortedBy { it.height } // Index 0 = lowest (e.g. 144p), max = highest (e.g. 1080p60 / 4K)
+}
 
 data class ChapterInfo(
     val title: String,
@@ -147,15 +186,12 @@ object DashManifestGenerator {
         }
         if (validVideos.isEmpty() || validAudios.isEmpty()) return null
 
-        val preferredAgent = validVideos.first().userAgent
-        val dashVideos = validVideos.filter { it.userAgent == preferredAgent }.ifEmpty { validVideos }
-            .filter {
-                val c = it.codec?.lowercase().orEmpty()
-                !c.startsWith("av01") || validVideos.none { other ->
-                    other.height == it.height && !other.codec.orEmpty().lowercase().startsWith("av01")
-                }
+        val dashVideos = validVideos.filter {
+            val c = it.codec?.lowercase().orEmpty()
+            !c.startsWith("av01") || validVideos.none { other ->
+                other.height == it.height && !other.codec.orEmpty().lowercase().startsWith("av01")
             }
-        val dashAudios = validAudios.filter { it.userAgent == preferredAgent }.ifEmpty { validAudios }
+        }
 
         val safeDuration = durationSeconds.coerceAtLeast(1L)
         val builder = builderFactory.newDocumentBuilder()
@@ -183,7 +219,7 @@ object DashManifestGenerator {
             }
         }
 
-        for (stream in dashAudios) {
+        for (stream in validAudios) {
             val mime = stream.mimeType ?: continue
             val codecPrefix = stream.codec?.substringBefore(".")?.lowercase().orEmpty()
             val key = "$mime:$codecPrefix:${stream.audioTrackId.orEmpty()}"

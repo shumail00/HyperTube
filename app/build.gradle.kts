@@ -9,11 +9,25 @@ plugins {
 }
 
 /**
- * Automatically purges any leftover legacy LibreTube XML resources, translations,
- * unused vector drawables, or legacy packages so resource linking never fails
- * with missing or duplicate symbols.
+ * Automatically purges any leftover legacy LibreTube XML resources, MotionLayout scenes,
+ * translations, unused vector drawables, fastlane metadata, or redundant extraction engines.
  */
 fun purgeLegacyLibreTubeFiles(projectDir: File) {
+    val rootFastlane = File(projectDir.parentFile, "fastlane")
+    if (rootFastlane.exists()) {
+        rootFastlane.deleteRecursively()
+    }
+
+    val assetsDir = File(projectDir, "src/main/assets")
+    if (assetsDir.exists()) {
+        assetsDir.deleteRecursively()
+    }
+
+    val schemasDir = File(projectDir, "schemas")
+    if (schemasDir.exists()) {
+        schemasDir.deleteRecursively()
+    }
+
     val resDir = File(projectDir, "src/main/res")
     if (resDir.exists()) {
         resDir.listFiles()?.forEach { dir ->
@@ -80,10 +94,7 @@ fun purgeLegacyLibreTubeFiles(projectDir: File) {
             "HyperStreamModels.kt",
             "HyperTubeRepository.kt",
             "JsonHelper.kt",
-            "NewPipeExtractorInstance.kt",
-            "RetrofitInstance.kt",
-            "YouTubeInnertubeClient.kt",
-            "poToken"
+            "RetrofitInstance.kt"
         )
         File(basePkgDir, "api").listFiles()?.forEach { entry ->
             if (entry.name !in allowedApiEntries) entry.deleteRecursively()
@@ -215,14 +226,14 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer.dash)
     implementation(libs.androidx.media3.session)
 
-    /* Networking & Serialization */
+    /* Networking & Serialization (Piped REST API via Retrofit) */
     implementation(libs.square.retrofit)
     implementation(libs.logging.interceptor)
     implementation(libs.kotlinx.serialization)
     implementation(libs.converter.kotlinx.serialization)
 
-    /* NewPipe Extractor */
-    implementation(libs.newpipeextractor)
+    // Unused legacy extractor commented out per Phase 1 Architecture Purge
+    // implementation(libs.newpipeextractor)
 
     /* Coil Compose Image Loading */
     implementation(libs.coil.compose)

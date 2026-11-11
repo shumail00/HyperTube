@@ -2,21 +2,9 @@ package com.github.libretube.api
 
 import android.net.Uri
 import androidx.core.net.toUri
-import com.github.libretube.api.poToken.PoTokenGenerator
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
-import org.schabi.newpipe.extractor.channel.ChannelInfo
-import org.schabi.newpipe.extractor.channel.tabs.ChannelTabInfo
-import org.schabi.newpipe.extractor.channel.tabs.ChannelTabs
-import org.schabi.newpipe.extractor.search.SearchInfo
-import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor
-import org.schabi.newpipe.extractor.stream.AudioStream
-import org.schabi.newpipe.extractor.stream.StreamInfo
-import org.schabi.newpipe.extractor.stream.StreamInfoItem
-import org.schabi.newpipe.extractor.stream.VideoStream
-import org.schabi.newpipe.extractor.channel.ChannelInfoItem
+import kotlin.math.min
 
 object YouTubeLinkParser {
     private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
@@ -30,25 +18,31 @@ object YouTubeLinkParser {
     fun isLikelyYouTubeLinkOrId(rawInput: String): Boolean {
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return false
-        if (VIDEO_ID_REGEX.matches(trimmed) && (trimmed.any { it.isDigit() } || trimmed.contains('-') || trimmed.contains('_'))) {
+        if (VIDEO_ID_REGEX.matches(trimmed) &&
+            (trimmed.any { it.isDigit() } || trimmed.contains('-') || trimmed.contains('_'))
+        ) {
             return true
         }
         val lower = trimmed.lowercase()
         return lower.contains("youtube.com/") ||
             lower.contains("youtu.be/") ||
-            lower.contains("youtube-nocookie.com/")
+            lower.contains("youtube-nocookie.com/") ||
+            lower.startsWith("/watch?v=")
     }
 
     fun parseInput(rawInput: String): ParsedLink? {
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return null
 
-        // Direct 11-char video ID
         if (VIDEO_ID_REGEX.matches(trimmed)) {
             return ParsedLink(videoId = trimmed)
         }
 
-        // Extract URL if shared with surrounding text
+        if (trimmed.startsWith("/watch")) {
+            val id = trimmed.substringAfter("v=").substringBefore("&").take(11)
+            if (id.length == 11) return ParsedLink(videoId = id)
+        }
+
         val candidateUrl = URL_EXTRACT_REGEX.find(trimmed)?.value ?: trimmed
         val normalizedUrl = if (!candidateUrl.startsWith("http://") && !candidateUrl.startsWith("https://")) {
             "https://$candidateUrl"
@@ -102,227 +96,242 @@ object YouTubeLinkParser {
     }
 }
 
-private fun VideoStream.toStreamFormat(isVideoOnly: Boolean): StreamFormat {
-    val resLabel = getResolution().orEmpty()
-    val normalizedHeight = YouTubeInnertubeClient.normalizeResolutionHeight(width, height, resLabel)
+private val QUALITY_HEIGHT_REGEX = Regex("(\\d{3,4})p")
+
+private fun normalizeHeight(width: Int, height: Int, qualityLabel: String?): Int {
+    if (!qualityLabel.isNullOrBlank()) {
+        val labelLower = qualityLabel.lowercase()
+        if (labelLower.contains("4k") || labelLower.contains("2160")) return 2160
+        if (labelLower.contains("2k") || labelLower.contains("1440")) return 1440
+        QUALITY_HEIGHT_REGEX.find(labelLower)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
+            if (it > 0) return it
+        }
+    }
+    if (width <= 0 && height <= 0) return 0
+    val shortEdge = if (width > 0 && height > 0) min(width, height) else height.coerceAtLeast(width)
+    return when {
+        shortEdge in 130..160 -> 144
+        shortEdge in 220..260 -> 240
+        shortEdge in 340..380 -> 360
+        shortEdge in 460..500 -> 480
+        shortEdge in 700..740 -> 720
+        shortEdge in 1060..1100 -> 1080
+        shortEdge in 1400..1480 -> 1440
+        shortEdge in 2100..2200 -> 2160
+        else -> shortEdge
+    }
+}
+
+private fun codecPriority(codec: String?): Int {
+    val c = codec?.lowercase().orEmpty()
+    return when {
+        c.startsWith("avc1") || c.contains("h264") -> 3
+        c.startsWith("vp9") || c.startsWith("vp09") -> 2
+        c.startsWith("av01") -> 1
+        else -> 0
+    }
+}
+
+private fun PipedStreamFormatDto.toStreamFormat(): StreamFormat? {
+    val cleanUrl = url?.takeIf { it.isNotBlank() && !it.startsWith("sabr://") } ?: return null
+    val resolvedHeight = normalizeHeight(width, height, quality)
+    val resolvedFps = when {
+        fps > 0 -> fps
+        quality?.contains("60") == true -> 60
+        else -> 30
+    }
     return StreamFormat(
-        url = content,
+        url = cleanUrl,
+        format = format,
+        quality = quality.orEmpty().ifBlank { if (resolvedHeight > 0) "${resolvedHeight}p" else "" },
+        mimeType = mimeType,
         codec = codec,
-        format = format?.toString(),
-        height = normalizedHeight,
-        width = if (width > 0) width else (normalizedHeight * 16) / 9,
-        quality = resLabel.ifBlank { "${normalizedHeight}p" },
-        mimeType = format?.mimeType ?: "video/mp4",
+        videoOnly = videoOnly,
         bitrate = bitrate,
         initStart = initStart,
         initEnd = initEnd,
         indexStart = indexStart,
         indexEnd = indexEnd,
-        fps = if (fps > 0) fps else 30,
-        contentLength = itagItem?.contentLength ?: 0L,
-        videoOnly = isVideoOnly,
-        itag = itagItem?.id,
-        userAgent = YouTubeInnertubeClient.resolveUserAgentForUrl(content)
+        width = if (width > 0) width else (resolvedHeight * 16) / 9,
+        height = resolvedHeight,
+        fps = resolvedFps,
+        contentLength = contentLength,
+        audioTrackId = audioTrackId,
+        audioTrackName = audioTrackName,
+        audioTrackType = audioTrackType,
+        audioLocale = audioTrackLocale,
+        itag = itag
     )
 }
 
-private fun AudioStream.toStreamFormat() = StreamFormat(
-    url = content,
-    format = format?.toString(),
-    quality = "${averageBitrate}kbps",
-    bitrate = bitrate.coerceAtLeast(averageBitrate * 1000),
-    mimeType = format?.mimeType ?: "audio/mp4",
-    initStart = initStart,
-    initEnd = initEnd,
-    indexStart = indexStart,
-    indexEnd = indexEnd,
-    contentLength = itagItem?.contentLength ?: 0L,
-    codec = codec,
-    audioTrackId = audioTrackId,
-    audioTrackName = audioTrackName,
-    audioLocale = audioLocale?.toLanguageTag(),
-    audioTrackType = audioTrackType?.name,
-    videoOnly = false,
-    itag = itagItem?.id,
-    userAgent = YouTubeInnertubeClient.resolveUserAgentForUrl(content)
-)
+private fun PipedStreamItemDto.toRelatedStreamInfo(): RelatedStreamInfo? {
+    val rawUrl = url ?: return null
+    val videoId = when {
+        rawUrl.startsWith("/watch?v=") -> rawUrl.substringAfter("/watch?v=").substringBefore("&").take(11)
+        else -> YouTubeLinkParser.parseInput(rawUrl)?.videoId
+    } ?: return null
 
-private fun StreamInfoItem.toRelatedStreamInfo(): RelatedStreamInfo? {
-    val relId = YouTubeLinkParser.parseInput(url)?.videoId ?: return null
+    if (videoId.isBlank()) return null
+
     return RelatedStreamInfo(
-        videoId = relId,
-        title = name.orEmpty(),
+        videoId = videoId,
+        title = title ?: name.orEmpty(),
         uploaderName = uploaderName.orEmpty(),
         uploaderUrl = uploaderUrl.orEmpty(),
-        uploaderAvatar = uploaderAvatars.maxByOrNull { it.height }?.url.orEmpty(),
-        uploaderVerified = isUploaderVerified,
-        thumbnailUrl = thumbnails.maxByOrNull { it.height }?.url
-            ?: "https://i.ytimg.com/vi/$relId/hqdefault.jpg",
-        durationSeconds = duration,
-        views = viewCount,
-        uploadedDate = textualUploadDate
-            ?: runCatching { uploadDate?.offsetDateTime()?.toLocalDate()?.toString() }.getOrNull().orEmpty()
+        uploaderAvatar = uploaderAvatar.orEmpty(),
+        uploaderVerified = uploaderVerified || verified,
+        thumbnailUrl = thumbnail?.takeIf { it.isNotBlank() }
+            ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+        durationSeconds = duration.coerceAtLeast(0L),
+        views = views.coerceAtLeast(0L),
+        uploadedDate = uploadedDate.orEmpty()
     )
 }
 
 object HyperTubeRepository {
-    private const val YOUTUBE_BASE = "https://www.youtube.com"
+    @Volatile
+    private var preferredBaseUrl: String = RetrofitInstance.PIPED_API_INSTANCES.first()
 
-    init {
-        runCatching {
-            YoutubeStreamExtractor.setPoTokenProvider(PoTokenGenerator())
-            YoutubeStreamExtractor.setFetchIosClient(true)
+    private fun orderedInstances(): List<String> {
+        val current = preferredBaseUrl
+        return listOf(current) + RetrofitInstance.PIPED_API_INSTANCES.filterNot { it == current }
+    }
+
+    private suspend fun <T> executeWithPipedFailover(
+        block: suspend (baseUrl: String) -> T
+    ): T {
+        var lastError: Throwable? = null
+        for (base in orderedInstances()) {
+            try {
+                val result = block(base.trimEnd('/'))
+                preferredBaseUrl = base
+                return result
+            } catch (t: Throwable) {
+                lastError = t
+            }
         }
+        throw lastError ?: IllegalStateException("All Piped REST API instances failed.")
     }
 
     suspend fun fetchStream(videoId: String): HyperStreamData = withContext(Dispatchers.IO) {
-        coroutineScope {
-            val url = "$YOUTUBE_BASE/watch?v=$videoId"
-
-            val innertubeDeferred = async {
-                runCatching { YouTubeInnertubeClient.fetchMultiClientStreams(videoId) }.getOrNull()
+        val resp = executeWithPipedFailover { baseUrl ->
+            val streamResponse = RetrofitInstance.pipedApi.getStreamsByUrl("$baseUrl/streams/$videoId")
+            if (streamResponse.title.isBlank() &&
+                streamResponse.videoStreams.isEmpty() &&
+                streamResponse.hls.isNullOrBlank()
+            ) {
+                throw IllegalStateException("Empty stream payload from $baseUrl")
             }
-            val newPipeDeferred = async {
-                runCatching { StreamInfo.getInfo(NewPipeExtractorInstance.extractor, url) }.getOrNull()
-            }
+            streamResponse
+        }
 
-            val innertube = innertubeDeferred.await()
-            val resp = newPipeDeferred.await()
+        val allVideoFormats = resp.videoStreams.mapNotNull { it.toStreamFormat() }
+            .filter { it.height > 0 }
 
-            if (resp == null && innertube == null) {
-                throw IllegalStateException("Unable to extract YouTube stream for video ID: $videoId")
-            }
-
-            val npMuxed = resp?.videoStreams.orEmpty()
-                .filter { !it.content.isNullOrBlank() && !it.content.startsWith("sabr://") }
-                .map { it.toStreamFormat(isVideoOnly = false) }
-                .filter { it.height > 0 }
-
-            val npAdaptive = resp?.videoOnlyStreams.orEmpty()
-                .filter { !it.content.isNullOrBlank() && !it.content.startsWith("sabr://") }
-                .map { it.toStreamFormat(isVideoOnly = true) }
-                .filter { it.height > 0 }
-
-            val npAudios = resp?.audioStreams.orEmpty()
-                .filter { !it.content.isNullOrBlank() && !it.content.startsWith("sabr://") }
-                .map { it.toStreamFormat() }
-
-            val mergedAdaptive = buildList {
-                addAll(innertube?.adaptiveVideoStreams.orEmpty())
-                for (npStream in npAdaptive) {
-                    if (none { it.height == npStream.height && it.itag == npStream.itag }) {
-                        add(npStream)
-                    }
-                }
-            }.sortedWith(
+        val muxedStreams = allVideoFormats
+            .filter { !it.videoOnly }
+            .sortedWith(
                 compareByDescending<StreamFormat> { it.height }
-                    .thenByDescending { YouTubeInnertubeClient.codecPriority(it.codec) }
                     .thenByDescending { it.fps }
                     .thenByDescending { it.bitrate }
             )
 
-            val mergedMuxed = (innertube?.muxedStreams.orEmpty() + npMuxed)
-                .distinctBy { it.height }
-                .sortedByDescending { it.height }
+        val adaptiveStreams = allVideoFormats
+            .filter { it.videoOnly }
+            .sortedWith(
+                compareByDescending<StreamFormat> { it.height }
+                    .thenByDescending { it.fps }
+                    .thenByDescending { codecPriority(it.codec) }
+                    .thenByDescending { it.bitrate }
+            )
 
-            val mergedAudios = (innertube?.audioStreams.orEmpty() + npAudios)
-                .distinctBy { "${it.userAgent}_${it.itag}_${it.audioTrackId.orEmpty()}" }
-                .sortedByDescending { it.bitrate }
+        val audioStreams = resp.audioStreams
+            .mapNotNull { it.toStreamFormat() }
+            .sortedByDescending { it.bitrate }
 
-            val related = resp?.relatedItems.orEmpty()
-                .filterIsInstance<StreamInfoItem>()
-                .mapNotNull { it.toRelatedStreamInfo() }
-
-            val chapters = resp?.streamSegments.orEmpty().map {
-                ChapterInfo(
-                    title = it.title.orEmpty(),
-                    startSeconds = it.startTimeSeconds.toLong(),
-                    previewUrl = it.previewUrl.orEmpty()
-                )
-            }
-
-            val subtitles = resp?.subtitles.orEmpty()
-                .filter { !it.content.isNullOrBlank() }
-                .map {
-                    SubtitleTrack(
-                        url = it.content,
-                        mimeType = it.format?.mimeType ?: "application/ttml+xml",
-                        languageName = it.displayLanguageName.orEmpty(),
-                        languageCode = it.languageTag.orEmpty(),
-                        isAutoGenerated = it.isAutoGenerated
-                    )
-                }
-
-            val uploadDateText = resp?.textualUploadDate
-                ?: runCatching { resp?.uploadDate?.offsetDateTime()?.toLocalDate()?.toString() }.getOrNull().orEmpty()
-
-            val resolvedDuration = when {
-                (resp?.duration ?: 0L) > 0L -> resp!!.duration
-                (innertube?.durationSeconds ?: 0L) > 0L -> innertube!!.durationSeconds
-                else -> 0L
-            }
-
-            val resolvedHls = innertube?.hlsManifestUrl?.takeIf { it.isNotBlank() }
-                ?: resp?.hlsUrl?.takeIf { it.isNotBlank() }
-
-            val resolvedDash = innertube?.dashManifestUrl?.takeIf { it.isNotBlank() }
-                ?: resp?.dashMpdUrl?.takeIf { it.isNotBlank() }
-
-            val resolvedUploaderUrl = resp?.uploaderUrl?.takeIf { it.isNotBlank() }
-                ?: innertube?.channelId?.takeIf { it.isNotBlank() }?.let { "$YOUTUBE_BASE/channel/$it" }
-                .orEmpty()
-
-            HyperStreamData(
-                videoId = videoId,
-                title = resp?.name?.takeIf { it.isNotBlank() } ?: innertube?.title.orEmpty(),
-                description = resp?.description?.content?.takeIf { it.isNotBlank() } ?: innertube?.description.orEmpty(),
-                uploaderName = resp?.uploaderName?.takeIf { it.isNotBlank() } ?: innertube?.author.orEmpty(),
-                uploaderUrl = resolvedUploaderUrl,
-                uploaderAvatar = resp?.uploaderAvatars?.maxByOrNull { it.height }?.url.orEmpty(),
-                uploaderSubscribers = resp?.uploaderSubscriberCount ?: -1L,
-                uploaderVerified = resp?.isUploaderVerified ?: false,
-                views = if ((resp?.viewCount ?: 0L) > 0L) resp!!.viewCount else (innertube?.viewCount ?: 0L),
-                likes = resp?.likeCount ?: -1L,
-                durationSeconds = resolvedDuration,
-                uploadDateText = uploadDateText,
-                thumbnailUrl = resp?.thumbnails?.maxByOrNull { it.height }?.url
-                    ?: innertube?.thumbnailUrl?.takeIf { it.isNotBlank() }
-                    ?: "https://i.ytimg.com/vi/$videoId/maxresdefault.jpg",
-                hlsUrl = resolvedHls,
-                dashMpdUrl = resolvedDash,
-                isLive = (resolvedDuration <= 0L && !resolvedHls.isNullOrBlank()) || (innertube?.isLive == true),
-                muxedVideoStreams = mergedMuxed,
-                adaptiveVideoStreams = mergedAdaptive,
-                audioStreams = mergedAudios,
-                chapters = chapters,
-                relatedStreams = related,
-                subtitles = subtitles
+        val chapters = resp.chapters.map {
+            ChapterInfo(
+                title = it.title,
+                startSeconds = it.start.coerceAtLeast(0L),
+                previewUrl = it.image.orEmpty()
             )
         }
+
+        val related = resp.relatedStreams.mapNotNull { it.toRelatedStreamInfo() }
+
+        val subtitles = resp.subtitles.mapNotNull { sub ->
+            val subUrl = sub.url?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            SubtitleTrack(
+                url = subUrl,
+                mimeType = sub.mimeType ?: "application/ttml+xml",
+                languageName = sub.name.orEmpty(),
+                languageCode = sub.code.orEmpty(),
+                isAutoGenerated = sub.autoGenerated
+            )
+        }
+
+        HyperStreamData(
+            videoId = videoId,
+            title = resp.title.ifBlank { "YouTube Video ($videoId)" },
+            description = resp.description,
+            uploaderName = resp.uploader,
+            uploaderUrl = resp.uploaderUrl,
+            uploaderAvatar = resp.uploaderAvatar.orEmpty(),
+            uploaderSubscribers = resp.uploaderSubscriberCount,
+            uploaderVerified = resp.uploaderVerified,
+            views = resp.views,
+            likes = resp.likes,
+            durationSeconds = resp.duration.coerceAtLeast(0L),
+            uploadDateText = resp.uploadDate.orEmpty(),
+            thumbnailUrl = resp.thumbnailUrl.ifBlank {
+                "https://i.ytimg.com/vi/$videoId/maxresdefault.jpg"
+            },
+            hlsUrl = resp.hls?.takeIf { it.isNotBlank() },
+            dashMpdUrl = resp.dash?.takeIf { it.isNotBlank() },
+            isLive = resp.livestream || (resp.duration <= 0L && !resp.hls.isNullOrBlank()),
+            muxedVideoStreams = muxedStreams,
+            adaptiveVideoStreams = adaptiveStreams,
+            audioStreams = audioStreams,
+            chapters = chapters,
+            relatedStreams = related,
+            subtitles = subtitles
+        )
     }
 
     suspend fun searchYouTube(query: String): SearchResultsPage = withContext(Dispatchers.IO) {
-        val service = NewPipeExtractorInstance.extractor
-        val searchHandler = service.searchQHFactory.fromQuery(query)
-        val searchInfo = SearchInfo.getInfo(service, searchHandler)
+        val resp = executeWithPipedFailover { baseUrl ->
+            RetrofitInstance.pipedApi.searchByUrl(
+                fullUrl = "$baseUrl/search",
+                query = query,
+                filter = "all"
+            )
+        }
 
-        val channels = searchInfo.relatedItems
-            .filterIsInstance<ChannelInfoItem>()
+        val channels = resp.items
+            .filter { item ->
+                item.type.equals("channel", ignoreCase = true) ||
+                    item.url?.startsWith("/channel/") == true
+            }
             .map { ch ->
+                val rawUrl = ch.url.orEmpty()
+                val channelId = rawUrl.substringAfterLast("/").ifBlank { ch.name.orEmpty() }
                 SearchChannelItem(
-                    channelId = ch.url?.substringAfterLast("/") ?: ch.name.orEmpty(),
-                    channelUrl = ch.url.orEmpty(),
-                    name = ch.name.orEmpty(),
-                    avatarUrl = ch.thumbnails.maxByOrNull { it.height }?.url.orEmpty(),
-                    subscriberCount = ch.subscriberCount,
-                    videoCount = ch.streamCount,
+                    channelId = channelId,
+                    channelUrl = rawUrl,
+                    name = ch.name ?: ch.title.orEmpty(),
+                    avatarUrl = ch.thumbnail.orEmpty(),
+                    subscriberCount = ch.subscribers,
+                    videoCount = ch.videos,
                     description = ch.description.orEmpty(),
-                    verified = ch.isVerified
+                    verified = ch.verified || ch.uploaderVerified
                 )
             }
 
-        val videos = searchInfo.relatedItems
-            .filterIsInstance<StreamInfoItem>()
+        val videos = resp.items
+            .filter { item ->
+                item.type.equals("stream", ignoreCase = true) ||
+                    item.url?.startsWith("/watch") == true
+            }
             .mapNotNull { it.toRelatedStreamInfo() }
 
         SearchResultsPage(
@@ -336,48 +345,40 @@ object HyperTubeRepository {
         channelUrlOrId: String,
         fallbackName: String = ""
     ): ChannelPageData = withContext(Dispatchers.IO) {
-        val service = NewPipeExtractorInstance.extractor
-        val normalizedUrl = when {
-            channelUrlOrId.startsWith("http://") || channelUrlOrId.startsWith("https://") -> channelUrlOrId
-            channelUrlOrId.startsWith("UC") -> "$YOUTUBE_BASE/channel/$channelUrlOrId"
-            channelUrlOrId.startsWith("@") -> "$YOUTUBE_BASE/$channelUrlOrId"
-            else -> "$YOUTUBE_BASE/channel/$channelUrlOrId"
-        }
+        val cleanChannelId = channelUrlOrId
+            .substringAfter("/channel/")
+            .substringBefore("?")
+            .substringBefore("/")
+            .trim()
 
-        val info = runCatching { ChannelInfo.getInfo(service, normalizedUrl) }.getOrNull()
-        if (info != null) {
-            val videosTabHandler = info.tabs.firstOrNull { it.contentFilters.contains(ChannelTabs.VIDEOS) }
-                ?: info.tabs.firstOrNull()
-            val tabItems = if (videosTabHandler != null) {
-                runCatching {
-                    ChannelTabInfo.getInfo(service, videosTabHandler)
-                        .relatedItems
-                        .filterIsInstance<StreamInfoItem>()
-                        .mapNotNull { it.toRelatedStreamInfo() }
-                }.getOrDefault(emptyList())
-            } else {
-                emptyList()
+        if (cleanChannelId.startsWith("UC")) {
+            val channelResp = runCatching {
+                executeWithPipedFailover { baseUrl ->
+                    RetrofitInstance.pipedApi.getChannelByUrl("$baseUrl/channel/$cleanChannelId")
+                }
+            }.getOrNull()
+
+            if (channelResp != null) {
+                return@withContext ChannelPageData(
+                    channelId = channelResp.id ?: cleanChannelId,
+                    channelUrl = "/channel/$cleanChannelId",
+                    name = channelResp.name.ifBlank { fallbackName },
+                    avatarUrl = channelResp.avatarUrl.orEmpty(),
+                    bannerUrl = channelResp.bannerUrl.orEmpty(),
+                    description = channelResp.description.orEmpty(),
+                    subscriberCount = channelResp.subscriberCount,
+                    verified = channelResp.verified,
+                    videos = channelResp.relatedStreams.mapNotNull { it.toRelatedStreamInfo() }
+                )
             }
-
-            return@withContext ChannelPageData(
-                channelId = info.id.orEmpty(),
-                channelUrl = info.url ?: normalizedUrl,
-                name = info.name.orEmpty().ifBlank { fallbackName },
-                avatarUrl = info.avatars.maxByOrNull { it.height }?.url.orEmpty(),
-                bannerUrl = info.banners.maxByOrNull { it.height }?.url.orEmpty(),
-                description = info.description.orEmpty(),
-                subscriberCount = info.subscriberCount,
-                verified = info.isVerified,
-                videos = tabItems
-            )
         }
 
-        // Fallback: search by channel name if direct channel URL failed
+        // Fallback: search via Piped /search endpoint
         val searchFallback = searchYouTube(fallbackName.ifBlank { channelUrlOrId })
         val matchedChannel = searchFallback.channels.firstOrNull()
         ChannelPageData(
-            channelId = matchedChannel?.channelId ?: channelUrlOrId,
-            channelUrl = matchedChannel?.channelUrl ?: normalizedUrl,
+            channelId = matchedChannel?.channelId ?: cleanChannelId,
+            channelUrl = matchedChannel?.channelUrl ?: channelUrlOrId,
             name = matchedChannel?.name?.ifBlank { fallbackName } ?: fallbackName,
             avatarUrl = matchedChannel?.avatarUrl.orEmpty(),
             description = matchedChannel?.description.orEmpty(),
